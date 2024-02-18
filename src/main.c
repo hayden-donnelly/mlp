@@ -77,31 +77,46 @@ static inline void relu(float* vec_in, float* vec_out, const int dim)
     }
 }
 
+void print_output(float* out, const int n)
+{
+    for(int i = 0; i < n; i++)
+    {
+        printf("%f ", out[i]);
+    }
+    printf("\n");
+}
+
 void forward_pass(float* params, float* in, float* out, float* activations)
 {
     vec_mat_mul(params, in, activations, INPUT_DIM, HIDDEN_DIM);
+    printf("Input layer:\n");
+    print_output(activations, HIDDEN_DIM);
     int activations_offset = 0;
     int params_offset = input_layer_param_count;
     for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
     {
         const int next_activations_offset = activations_offset + HIDDEN_DIM;
         vec_mat_mul(
-            &params[params_offset], 
-            &activations[activations_offset], 
-            &activations[next_activations_offset],
+            params + params_offset, 
+            activations + activations_offset, 
+            activations + next_activations_offset,
             HIDDEN_DIM,
             HIDDEN_DIM
         );
+        printf("Hidden layer %d:\n", i);
+        print_output(activations + next_activations_offset, HIDDEN_DIM);
         activations_offset = next_activations_offset;
         params_offset += hidden_layer_param_count;
     }
     vec_mat_mul(
-        &params[params_offset], 
-        &activations[activations_offset], 
+        params + params_offset, 
+        activations + activations_offset, 
         out,
         HIDDEN_DIM,
         OUTPUT_DIM
     );
+    printf("Output layer:\n");
+    print_output(out, OUTPUT_DIM);
 }
 
 int main()
