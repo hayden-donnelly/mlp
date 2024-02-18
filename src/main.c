@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "mnist.h"
 
 #define NUM_HIDDEN_LAYERS 3
 #define HIDDEN_DIM 3
@@ -45,4 +46,9 @@ int main()
         printf("%f ", out[i]);
     }
     printf("\n");
+    load_mnist();
+    for(int i = 0; i < NUM_TEST; i++)
+    {
+        printf("%d\n", test_label[i]);
+    }
 }

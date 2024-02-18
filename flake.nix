@@ -11,8 +11,10 @@
         inherit (nixpkgs);
         pkgs = import nixpkgs { inherit system; };
     in {
-        packages = {
-            default = pkgs.callPackage ./. {};
+        devShells = {
+            default = pkgs.mkShell {
+                buildInputs = with pkgs; [ libgcc ];
+            };
         };
     });
 }
