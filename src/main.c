@@ -10,6 +10,10 @@
 #define OUTPUT_DIM 10
 #define BATCH_SIZE 1
 
+const int input_layer_param_count = INPUT_DIM * HIDDEN_DIM;
+const int hidden_layer_param_count = HIDDEN_DIM * HIDDEN_DIM;
+const int output_layer_param_count = HIDDEN_DIM * OUTPUT_DIM;
+ 
 const double two_pi = 2.0*3.14159265358979323846;
 
 float random_normal()
@@ -39,9 +43,6 @@ float random_normal()
 
 float* init_params()
 {
-    const int input_layer_param_count = INPUT_DIM * HIDDEN_DIM;
-    const int hidden_layer_param_count = HIDDEN_DIM * HIDDEN_DIM;
-    const int output_layer_param_count = HIDDEN_DIM * OUTPUT_DIM;
     const int total_param_count = 
         (NUM_HIDDEN_LAYERS * hidden_layer_param_count)
         + input_layer_param_count + output_layer_param_count;
@@ -50,7 +51,6 @@ float* init_params()
     for(int i = 0; i < total_param_count; i++)
     {
         params[i] = random_normal();
-        printf("%f ", params[i]);
     }
     return params;
 }
@@ -77,11 +77,43 @@ static inline void relu(float* vec_in, float* vec_out, const int dim)
     }
 }
 
+void forward_pass(float* params, float* in, float* out, float* activations)
+{
+    vec_mat_mul(params, in, activations, INPUT_DIM, HIDDEN_DIM);
+    int activations_offset = 0;
+    int params_offset = input_layer_param_count;
+    for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
+    {
+        const int next_activations_offset = activations_offset + HIDDEN_DIM;
+        vec_mat_mul(
+            &params[params_offset], 
+            &activations[activations_offset], 
+            &activations[next_activations_offset],
+            HIDDEN_DIM,
+            HIDDEN_DIM
+        );
+        activations_offset = next_activations_offset;
+        params_offset += hidden_layer_param_count;
+    }
+    vec_mat_mul(
+        &params[params_offset], 
+        &activations[activations_offset], 
+        out,
+        HIDDEN_DIM,
+        OUTPUT_DIM
+    );
+}
+
 int main()
 {
     float* params = init_params();
     float in[INPUT_DIM] = {1.0f};
     float out[OUTPUT_DIM] = {0.0f};
-    load_mnist();
+    float activations[HIDDEN_DIM * NUM_HIDDEN_LAYERS];
+    forward_pass(params, in, out, activations);
+    for(int i = 0; i < OUTPUT_DIM; i++)
+    {
+        printf("%f ", out[i]);
+    }
     free(params);
 }
