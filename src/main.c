@@ -47,7 +47,7 @@ int main()
     }
     printf("\n");
     load_mnist();
-    for(int i = 0; i < NUM_TEST; i++)
+    for(int i = 0; i < MNIST_NUM_TEST; i++)
     {
         printf("%d\n", test_label[i]);
     }
