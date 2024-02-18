@@ -55,26 +55,24 @@ float* init_params()
     return params;
 }
 
-static inline void vec_mat_mul(
+static inline void scalar_relu(float* a)
+{
+    *a = (*a > 0.0f) ? *a : 0.0f;
+}
+
+static inline void vec_mat_mul_relu_norm(
     float* mat, float* vec_in, float* vec_out, 
     const int in_dim, const int out_dim
 ){
     int mat_offset = 0;
-    for(int x = 0; x < in_dim; x++)
+    for(int out_idx = 0; out_idx < out_dim; out_idx++)
     {
-        vec_out[x] = 0.0f;
-        for(int y = 0; y < out_dim; y ++)
+        vec_out[out_idx] = 0.0f;
+        for(int in_idx = 0; in_idx < in_dim; in_idx++)
         {
-            vec_out[x] += mat[mat_offset++] * vec_in[y];
+            vec_out[out_idx] += mat[mat_offset++] * vec_in[in_idx];
         }
-    }
-}
-
-static inline void relu(float* vec_in, float* vec_out, const int dim)
-{
-    for(int i = 0; i < dim; i++)
-    {
-        vec_out[i] = (vec_in[i] > 0.0f) ? vec_in[i] : 0.0f;
+        scalar_relu(vec_out + out_idx);
     }
 }
 
@@ -89,7 +87,7 @@ void print_output(float* out, const int n)
 
 void forward_pass(float* params, float* in, float* out, float* activations)
 {
-    vec_mat_mul(params, in, activations, INPUT_DIM, HIDDEN_DIM);
+    vec_mat_mul_relu_norm(params, in, activations, INPUT_DIM, HIDDEN_DIM);
     printf("Input layer:\n");
     print_output(activations, HIDDEN_DIM);
     int activations_offset = 0;
@@ -97,7 +95,7 @@ void forward_pass(float* params, float* in, float* out, float* activations)
     for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
     {
         const int next_activations_offset = activations_offset + HIDDEN_DIM;
-        vec_mat_mul(
+        vec_mat_mul_relu_norm(
             params + params_offset, 
             activations + activations_offset, 
             activations + next_activations_offset,
@@ -109,7 +107,7 @@ void forward_pass(float* params, float* in, float* out, float* activations)
         activations_offset = next_activations_offset;
         params_offset += hidden_layer_param_count;
     }
-    vec_mat_mul(
+    vec_mat_mul_relu_norm(
         params + params_offset, 
         activations + activations_offset, 
         out,
