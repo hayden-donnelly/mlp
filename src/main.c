@@ -1,10 +1,59 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <float.h>
 #include "mnist.h"
 
+#define INPUT_DIM 784 // 28*28
 #define NUM_HIDDEN_LAYERS 3
-#define HIDDEN_DIM 3
+#define HIDDEN_DIM 256
 #define OUTPUT_DIM 10
 #define BATCH_SIZE 1
+
+const double two_pi = 2.0*3.14159265358979323846;
+
+float random_normal()
+{
+    const double epsilon = DBL_MIN;
+    static float z1, z2;
+    static int generate;
+    
+    generate = !generate;
+    if(!generate)
+    {
+        return z2;
+    }
+
+    double u1, u2;
+    do
+    {
+       u1 = rand() * (1.0 / RAND_MAX);
+       u2 = rand() * (1.0 / RAND_MAX);
+    }
+    while (u1 <= epsilon);
+
+    z1 = (float)(sqrt(-2.0 * log(u1)) * cos(two_pi * u2));
+    z2 = (float)(sqrt(-2.0 * log(u1)) * sin(two_pi * u2));
+    return z1;
+}
+
+float* init_params()
+{
+    const int input_layer_param_count = INPUT_DIM * HIDDEN_DIM;
+    const int hidden_layer_param_count = HIDDEN_DIM * HIDDEN_DIM;
+    const int output_layer_param_count = HIDDEN_DIM * OUTPUT_DIM;
+    const int total_param_count = 
+        (NUM_HIDDEN_LAYERS * hidden_layer_param_count)
+        + input_layer_param_count + output_layer_param_count;
+
+    float* params = (float*)malloc(sizeof(float) * total_param_count);
+    for(int i = 0; i < total_param_count; i++)
+    {
+        params[i] = random_normal();
+        printf("%f ", params[i]);
+    }
+    return params;
+}
 
 static inline void vec_mat_mul(
     float* mat, float* vec_in, float* vec_out, 
@@ -30,25 +79,9 @@ static inline void relu(float* vec_in, float* vec_out, const int dim)
 
 int main()
 {
-    printf("Hello World\n");
-    float params[9] = 
-    {
-        1.0f, 0.0f, 0.0f,
-        0.0f, -2.0f, 0.0f,
-        0.0f, 0.0f, 1.0f
-    };
-    float in[3] = {1.0f, 2.0f, 3.0f};
-    float out[3] = {0.0f};
-    vec_mat_mul(params, in, out, HIDDEN_DIM, HIDDEN_DIM);
-    relu(out, out, HIDDEN_DIM);
-    for(int i = 0; i < HIDDEN_DIM; i++)
-    {
-        printf("%f ", out[i]);
-    }
-    printf("\n");
+    float* params = init_params();
+    float in[INPUT_DIM] = {1.0f};
+    float out[OUTPUT_DIM] = {0.0f};
     load_mnist();
-    for(int i = 0; i < MNIST_NUM_TEST; i++)
-    {
-        printf("%d\n", test_label[i]);
-    }
+    free(params);
 }
