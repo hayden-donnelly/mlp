@@ -62,6 +62,7 @@ static inline void vec_mat_mul(
     int mat_offset = 0;
     for(int x = 0; x < in_dim; x++)
     {
+        vec_out[x] = 0.0f;
         for(int y = 0; y < out_dim; y ++)
         {
             vec_out[x] += mat[mat_offset++] * vec_in[y];
