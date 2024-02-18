@@ -65,6 +65,7 @@ static inline void vec_mat_mul_relu_norm(
     const int in_dim, const int out_dim
 ){
     int mat_offset = 0;
+    float layer_sum = 0.0f;
     for(int out_idx = 0; out_idx < out_dim; out_idx++)
     {
         vec_out[out_idx] = 0.0f;
@@ -73,6 +74,20 @@ static inline void vec_mat_mul_relu_norm(
             vec_out[out_idx] += mat[mat_offset++] * vec_in[in_idx];
         }
         scalar_relu(vec_out + out_idx);
+        layer_sum += vec_out[out_idx];
+    }
+    const float layer_mean = layer_sum / (float)out_dim;
+    layer_sum = 0.0f;
+    for(int i = 0; i < out_dim; i++)
+    {
+        const float mean_shifted = vec_out[i] - layer_mean;
+        layer_sum += mean_shifted * mean_shifted;
+    }
+    const float sqrt_layer_variance = (float)sqrt((double)(layer_sum / (float)out_dim) + 0.00001);
+    printf("var %f, mean %f\n", sqrt_layer_variance, layer_mean);
+    for(int i = 0; i < out_dim; i++)
+    {
+        vec_out[i] = (vec_out[i] - layer_mean) / sqrt_layer_variance;
     }
 }
 
