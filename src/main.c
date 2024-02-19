@@ -91,6 +91,27 @@ static inline void vec_mat_mul_relu_norm(
     }
 }
 
+static inline void vec_mat_mul_softmax(
+    float* mat, float* vec_in, float* vec_out, 
+    const int in_dim, const int out_dim
+){
+    int mat_offset = 0;
+    double exp_layer_sum = 0.0f;
+    for(int out_idx = 0; out_idx < out_dim; out_idx++)
+    {
+        vec_out[out_idx] = 0.0f;
+        for(int in_idx = 0; in_idx < in_dim; in_idx++)
+        {
+            vec_out[out_idx] += mat[mat_offset++] * vec_in[in_idx];
+        }
+        exp_layer_sum += exp((double)vec_out[out_idx]);
+    }
+    for(int i = 0; i < out_dim; i++)
+    {
+        vec_out[i] = (float)(exp((double)vec_out[i]) / exp_layer_sum); 
+    }
+}
+
 void print_output(float* out, const int n)
 {
     for(int i = 0; i < n; i++)
@@ -122,7 +143,7 @@ void forward_pass(float* params, float* in, float* out, float* activations)
         activations_offset = next_activations_offset;
         params_offset += hidden_layer_param_count;
     }
-    vec_mat_mul_relu_norm(
+    vec_mat_mul_softmax(
         params + params_offset, 
         activations + activations_offset, 
         out,
