@@ -1,2 +1,2 @@
 # cpu-mlp
-Multilayer perceptron training on a CPU.
+Multi-layer perceptron training on a CPU.
