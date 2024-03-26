@@ -139,6 +139,25 @@ static inline void vec_mat_mul_softmax(
     }
 }
 
+void mse(float* label, float* pred_label, float* loss, const int num_classes)
+{
+    float error_sum = 0.0f;
+    for(int i = 0; i < num_classes; i++)
+    {
+        const float error = label[i] - pred_label[i];
+        error_sum += error * error;
+    }
+    *loss = error_sum / (float)num_classes; 
+}
+
+void mse_backward(float* label, float* pred_label, float* pred_label_grad, const in num_classes)
+{
+    for(int i = 0; i < num_classes; i++)
+    {
+        pred_label_grad[i] = 2.0f * (pred_label[i] - label[i]) / (float)num_classes;
+    }
+}
+
 void print_output(float* out, const int n)
 {
     for(int i = 0; i < n; i++)
@@ -170,7 +189,7 @@ void forward_pass(float* params, float* in, float* out, float* activations)
         activations_offset = next_activations_offset;
         params_offset += hidden_layer_param_count;
     }
-    vec_mat_mul_softmax(
+    vec_mat_mul_sigmoid(
         params + params_offset, 
         activations + activations_offset, 
         out,
