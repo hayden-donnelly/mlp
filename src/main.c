@@ -65,7 +65,7 @@ static inline void sigmoid(float *a)
     *a = 1.0f / (1.0f + (float)exp(-(double)*a));
 }
 
-static inline void vec_mat_mul_relu(
+static inline void vec_mat_mul_sigmoid(
     float* mat, float* vec_in, float* vec_out, 
     const int in_dim, const int out_dim
 ){
@@ -78,6 +78,43 @@ static inline void vec_mat_mul_relu(
             vec_out[out_idx] += mat[mat_offset++] * vec_in[in_idx];
         }
         sigmoid(vec_out + out_idx);
+    }
+}
+
+static inline void vec_mat_mul_sigmoid_backward(
+    float* mat, float* vec_in, 
+    float* vec_out, float* vec_out_grad,
+    float* mat_grad, float* vec_in_grad,
+    const int in_dim, const int out_dim
+){
+    // Notation: f: R^(vec_in) -> R^(vec_out), f(x) = Wx.
+    float vec_mat_mul_grad[out_dim];
+    for(int i = 0; i < out_dim; i++)
+    {
+        // dsig_i/df_i = (sig(f_i) * (1 - sig(f_i)).
+        // dL/df_i = dsig_i/df_i * dL/dsig_i.
+        vec_mat_mul_grad[i] = (vec_out[i] * (1.0f - vec_out[i])) * vec_out_grad[i];
+    }
+    for(int in_idx = 0; in_idx < in_dim; in_idx++)
+    {
+        for(int out_idx = 0; out_idx < out_dim; out_idx++)
+        {
+            // df_j/dx_i = W_ij.
+            // dL/dx_i = [df_1/dx_i * dL/df_1, df_2/dx_i * dL/df_2, ... , df_n/dx_i * dL/df_n.
+            // Take a transposed view of the matrix.
+            const int mat_offset = out_idx * in_dim;
+            vec_in_grad[in_idx] += mat[mat_offset] * vec_mat_mul_grad[out_idx];
+        }
+    }
+    int mat_grad_offset = 0;
+    for(int out_idx = 0; out_idx < out_dim; out_idx++)
+    {
+        for(int in_idx = 0; in_idx < in_dim; in_idx++)
+        {
+            // dL/dW = dL/df * x^T.
+            // dL/dW_ij = x_j * dL/df_i.
+            mat_grad[mat_grad_offset++] = vec_in[in_idx] * vec_mat_mul_grad[out_idx];
+        }
     }
 }
 
@@ -113,7 +150,7 @@ void print_output(float* out, const int n)
 
 void forward_pass(float* params, float* in, float* out, float* activations)
 {
-    vec_mat_mul_relu(params, in, activations, INPUT_DIM, HIDDEN_DIM);
+    vec_mat_mul_sigmoid(params, in, activations, INPUT_DIM, HIDDEN_DIM);
     printf("Input layer:\n");
     print_output(activations, HIDDEN_DIM);
     int activations_offset = 0;
@@ -121,7 +158,7 @@ void forward_pass(float* params, float* in, float* out, float* activations)
     for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
     {
         const int next_activations_offset = activations_offset + HIDDEN_DIM;
-        vec_mat_mul_relu(
+        vec_mat_mul_sigmoid(
             params + params_offset, 
             activations + activations_offset, 
             activations + next_activations_offset,
