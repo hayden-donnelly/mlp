@@ -97,13 +97,13 @@ static inline void vec_mat_mul_sigmoid_backward(
     }
     for(int in_idx = 0; in_idx < in_dim; in_idx++)
     {
+        vec_in_grad[in_idx] = 0.0f;
         for(int out_idx = 0; out_idx < out_dim; out_idx++)
         {
             // df_j/dx_i = W_ij.
             // dL/dx_i = [df_1/dx_i * dL/df_1, df_2/dx_i * dL/df_2, ... , df_n/dx_i * dL/df_n.
             // Take a transposed view of the matrix.
-            const int mat_offset = out_idx * in_dim;
-            vec_in_grad[in_idx] += mat[mat_offset] * vec_mat_mul_grad[out_idx];
+            vec_in_grad[in_idx] += mat[out_idx * in_dim + in_idx] * vec_mat_mul_grad[out_idx];
         }
     }
     int mat_grad_offset = 0;
@@ -150,7 +150,7 @@ void mse(float* label, float* pred_label, float* loss, const int num_classes)
     *loss = error_sum / (float)num_classes; 
 }
 
-void mse_backward(float* label, float* pred_label, float* pred_label_grad, const in num_classes)
+void mse_backward(float* label, float* pred_label, float* pred_label_grad, const int num_classes)
 {
     for(int i = 0; i < num_classes; i++)
     {
