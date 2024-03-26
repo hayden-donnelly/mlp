@@ -60,12 +60,16 @@ static inline void scalar_relu(float* a)
     *a = (*a > 0.0f) ? *a : 0.0f;
 }
 
-static inline void vec_mat_mul_relu_norm(
+static inline void sigmoid(float *a)
+{
+    *a = 1.0f / (1.0f + (float)exp(-(double)*a));
+}
+
+static inline void vec_mat_mul_relu(
     float* mat, float* vec_in, float* vec_out, 
     const int in_dim, const int out_dim
 ){
     int mat_offset = 0;
-    float layer_sum = 0.0f;
     for(int out_idx = 0; out_idx < out_dim; out_idx++)
     {
         vec_out[out_idx] = 0.0f;
@@ -73,21 +77,7 @@ static inline void vec_mat_mul_relu_norm(
         {
             vec_out[out_idx] += mat[mat_offset++] * vec_in[in_idx];
         }
-        scalar_relu(vec_out + out_idx);
-        layer_sum += vec_out[out_idx];
-    }
-    const float layer_mean = layer_sum / (float)out_dim;
-    layer_sum = 0.0f;
-    for(int i = 0; i < out_dim; i++)
-    {
-        const float mean_shifted = vec_out[i] - layer_mean;
-        layer_sum += mean_shifted * mean_shifted;
-    }
-    const float sqrt_layer_variance = (float)sqrt((double)(layer_sum / (float)out_dim) + 0.00001);
-    printf("var %f, mean %f\n", sqrt_layer_variance, layer_mean);
-    for(int i = 0; i < out_dim; i++)
-    {
-        vec_out[i] = (vec_out[i] - layer_mean) / sqrt_layer_variance;
+        sigmoid(vec_out + out_idx);
     }
 }
 
@@ -123,7 +113,7 @@ void print_output(float* out, const int n)
 
 void forward_pass(float* params, float* in, float* out, float* activations)
 {
-    vec_mat_mul_relu_norm(params, in, activations, INPUT_DIM, HIDDEN_DIM);
+    vec_mat_mul_relu(params, in, activations, INPUT_DIM, HIDDEN_DIM);
     printf("Input layer:\n");
     print_output(activations, HIDDEN_DIM);
     int activations_offset = 0;
@@ -131,7 +121,7 @@ void forward_pass(float* params, float* in, float* out, float* activations)
     for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
     {
         const int next_activations_offset = activations_offset + HIDDEN_DIM;
-        vec_mat_mul_relu_norm(
+        vec_mat_mul_relu(
             params + params_offset, 
             activations + activations_offset, 
             activations + next_activations_offset,
