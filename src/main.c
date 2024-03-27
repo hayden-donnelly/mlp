@@ -254,8 +254,27 @@ void backward_pass(params_t* params, float* out_grad)
         HIDDEN_DIM,
         OUTPUT_DIM
     );
-    printf("Output layer grad:\n");
-    print_layer(params->weight_grads + weight_offset, HIDDEN_DIM, OUTPUT_DIM);
+    //printf("Output layer grad:\n");
+    //print_layer(params->weight_grads + weight_offset, HIDDEN_DIM, OUTPUT_DIM);
+    activation_offset -= HIDDEN_DIM;
+    for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
+    {
+        weight_offset -= hidden_layer_weight_count;
+        const int next_activation_offset = activation_offset - HIDDEN_DIM;
+        vec_mat_mul_sigmoid_backward(
+            params->weights + weight_offset, 
+            params->activations + next_activation_offset,
+            params->activations + activation_offset,
+            activation_grad,
+            params->weight_grads + weight_offset,
+            activation_grad,
+            HIDDEN_DIM,
+            OUTPUT_DIM
+        );
+        printf("\nHidden layer %d activation grad:\n", NUM_HIDDEN_LAYERS - (i+1));
+        print_output(activation_grad, HIDDEN_DIM);
+        activation_offset = next_activation_offset;
+    }
 }
 
 int main()
