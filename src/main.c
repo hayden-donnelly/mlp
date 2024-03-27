@@ -10,11 +10,19 @@
 #define OUTPUT_DIM 10
 #define BATCH_SIZE 1
 
-const int input_layer_param_count = INPUT_DIM * HIDDEN_DIM;
-const int hidden_layer_param_count = HIDDEN_DIM * HIDDEN_DIM;
-const int output_layer_param_count = HIDDEN_DIM * OUTPUT_DIM;
+const int input_layer_weight_count = INPUT_DIM * HIDDEN_DIM;
+const int hidden_layer_weight_count = HIDDEN_DIM * HIDDEN_DIM;
+const int output_layer_weight_count = HIDDEN_DIM * OUTPUT_DIM;
  
 const double two_pi = 2.0*3.14159265358979323846;
+
+typedef struct
+{
+    float* weights;
+    float* weight_grads;
+    float* activations_out;
+    float* activations;
+} params_t;
 
 float random_normal()
 {
@@ -41,16 +49,33 @@ float random_normal()
     return z1;
 }
 
-float* init_params()
+params_t* init_params()
 {
-    const int total_param_count = 
-        (NUM_HIDDEN_LAYERS * hidden_layer_param_count)
-        + input_layer_param_count + output_layer_param_count;
-
-    float* params = (float*)malloc(sizeof(float) * total_param_count);
-    for(int i = 0; i < total_param_count; i++)
+    const int total_weight_count = 
+        (NUM_HIDDEN_LAYERS * hidden_layer_weight_count)
+        + input_layer_weight_count + output_layer_weight_count;
+    
+    params_t* params = (params_t*)malloc(sizeof(params_t));
+    const size_t weights_size = sizeof(float) * total_weight_count;
+    params->weights = (float*)malloc(weights_size);
+    params->weight_grads = (float*)malloc(weights_size);
+    for(int i = 0; i < total_weight_count; i++)
     {
-        params[i] = random_normal();
+        params->weights[i] = random_normal();
+        params->weight_grads[i] = 0.0f;
+    }
+
+    params->activations_out = (float*)malloc(sizeof(float) * OUTPUT_DIM);
+    for(int i = 0; i < OUTPUT_DIM; i++)
+    {
+        params->activations_out[i] = 0.0f;
+    }
+
+    const int num_inter_activations = (NUM_HIDDEN_LAYERS+1) * HIDDEN_DIM;
+    params->activations = (float*)malloc(sizeof(float) * num_inter_activations);
+    for(int i = 0; i < num_inter_activations; i++)
+    {
+        params->activations[i] = 0.0f;
     }
     return params;
 }
@@ -167,30 +192,32 @@ void print_output(float* out, const int n)
     printf("\n");
 }
 
-void forward_pass(float* params, float* in, float* out, float* activations)
+void forward_pass(float* weights, float* in, float* out, float* activations)
 {
-    vec_mat_mul_sigmoid(params, in, activations, INPUT_DIM, HIDDEN_DIM);
+    vec_mat_mul_sigmoid(weights, in, activations, INPUT_DIM, HIDDEN_DIM);
     printf("Input layer:\n");
     print_output(activations, HIDDEN_DIM);
     int activations_offset = 0;
-    int params_offset = input_layer_param_count;
+    int weight_offset = input_layer_weight_count;
+    printf("num hidden layers %d\n", NUM_HIDDEN_LAYERS);
     for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
     {
         const int next_activations_offset = activations_offset + HIDDEN_DIM;
         vec_mat_mul_sigmoid(
-            params + params_offset, 
+            weights + weight_offset, 
             activations + activations_offset, 
             activations + next_activations_offset,
             HIDDEN_DIM,
             HIDDEN_DIM
         );
+        if(i == 2) {return;}
         printf("Hidden layer %d:\n", i);
         print_output(activations + next_activations_offset, HIDDEN_DIM);
         activations_offset = next_activations_offset;
-        params_offset += hidden_layer_param_count;
+        weight_offset += hidden_layer_weight_count;
     }
     vec_mat_mul_sigmoid(
-        params + params_offset, 
+        weights + weight_offset, 
         activations + activations_offset, 
         out,
         HIDDEN_DIM,
@@ -202,14 +229,30 @@ void forward_pass(float* params, float* in, float* out, float* activations)
 
 int main()
 {
-    float* params = init_params();
+    params_t* params = init_params();
     float in[INPUT_DIM] = {1.0f};
-    float out[OUTPUT_DIM] = {0.0f};
-    float activations[HIDDEN_DIM * NUM_HIDDEN_LAYERS];
-    forward_pass(params, in, out, activations);
+    printf("init done\n");
+    forward_pass(
+        params->weights, 
+        in,
+        params->activations_out, 
+        params->activations
+    );
+    printf("forward done\n");
+    int activation_offset = 0;
+    for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
+    {
+        printf("layer %d\n", i);
+        print_output(params->activations + activation_offset, HIDDEN_DIM);
+        activation_offset += HIDDEN_DIM;
+    }
     for(int i = 0; i < OUTPUT_DIM; i++)
     {
-        printf("%f ", out[i]);
+        printf("%f ", params->activations_out[i]);
     }
+    free(params->activations_out);
+    free(params->activations);
+    free(params->weights);
+    free(params->weight_grads);
     free(params);
 }
