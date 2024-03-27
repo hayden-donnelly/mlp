@@ -192,48 +192,43 @@ void print_output(float* out, const int n)
     printf("\n");
 }
 
-void forward_pass(float* weights, float* in, float* out, float* activations)
+void forward_pass(params_t* params, float* in)
 {
-    vec_mat_mul_sigmoid(weights, in, activations, INPUT_DIM, HIDDEN_DIM);
+    vec_mat_mul_sigmoid(params->weights, in, params->activations, INPUT_DIM, HIDDEN_DIM);
     printf("Input layer:\n");
-    print_output(activations, HIDDEN_DIM);
+    print_output(params->activations, HIDDEN_DIM);
     int activations_offset = 0;
     int weight_offset = input_layer_weight_count;
     for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
     {
         const int next_activations_offset = activations_offset + HIDDEN_DIM;
         vec_mat_mul_sigmoid(
-            weights + weight_offset, 
-            activations + activations_offset, 
-            activations + next_activations_offset,
+            params->weights + weight_offset, 
+            params->activations + activations_offset, 
+            params->activations + next_activations_offset,
             HIDDEN_DIM,
             HIDDEN_DIM
         );
-        print_output(activations + next_activations_offset, HIDDEN_DIM);
+        print_output(params->activations + next_activations_offset, HIDDEN_DIM);
         activations_offset = next_activations_offset;
         weight_offset += hidden_layer_weight_count;
     }
     vec_mat_mul_sigmoid(
-        weights + weight_offset, 
-        activations + activations_offset, 
-        out,
+        params->weights + weight_offset, 
+        params->activations + activations_offset, 
+        params->activations_out,
         HIDDEN_DIM,
         OUTPUT_DIM
     );
     printf("Output layer:\n");
-    print_output(out, OUTPUT_DIM);
+    print_output(params->activations_out, OUTPUT_DIM);
 }
 
 int main()
 {
     params_t* params = init_params();
     float in[INPUT_DIM] = {1.0f};
-    forward_pass(
-        params->weights, 
-        in,
-        params->activations_out, 
-        params->activations
-    );
+    forward_pass(params, in);
     for(int i = 0; i < OUTPUT_DIM; i++)
     {
         printf("%f ", params->activations_out[i]);
