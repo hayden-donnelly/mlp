@@ -199,7 +199,6 @@ void forward_pass(float* weights, float* in, float* out, float* activations)
     print_output(activations, HIDDEN_DIM);
     int activations_offset = 0;
     int weight_offset = input_layer_weight_count;
-    printf("num hidden layers %d\n", NUM_HIDDEN_LAYERS);
     for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
     {
         const int next_activations_offset = activations_offset + HIDDEN_DIM;
@@ -210,8 +209,6 @@ void forward_pass(float* weights, float* in, float* out, float* activations)
             HIDDEN_DIM,
             HIDDEN_DIM
         );
-        if(i == 2) {return;}
-        printf("Hidden layer %d:\n", i);
         print_output(activations + next_activations_offset, HIDDEN_DIM);
         activations_offset = next_activations_offset;
         weight_offset += hidden_layer_weight_count;
@@ -231,21 +228,12 @@ int main()
 {
     params_t* params = init_params();
     float in[INPUT_DIM] = {1.0f};
-    printf("init done\n");
     forward_pass(
         params->weights, 
         in,
         params->activations_out, 
         params->activations
     );
-    printf("forward done\n");
-    int activation_offset = 0;
-    for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
-    {
-        printf("layer %d\n", i);
-        print_output(params->activations + activation_offset, HIDDEN_DIM);
-        activation_offset += HIDDEN_DIM;
-    }
     for(int i = 0; i < OUTPUT_DIM; i++)
     {
         printf("%f ", params->activations_out[i]);
