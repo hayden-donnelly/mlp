@@ -22,6 +22,8 @@ typedef struct
     float* weight_grads;
     float* activations_out;
     float* activations;
+    int num_activations;
+    int num_weights;
 } params_t;
 
 float random_normal()
@@ -51,15 +53,15 @@ float random_normal()
 
 params_t* init_params()
 {
-    const int total_weight_count = 
+    params_t* params = (params_t*)malloc(sizeof(params_t));
+    params->num_weights = 
         (NUM_HIDDEN_LAYERS * hidden_layer_weight_count)
         + input_layer_weight_count + output_layer_weight_count;
     
-    params_t* params = (params_t*)malloc(sizeof(params_t));
-    const size_t weights_size = sizeof(float) * total_weight_count;
+    const size_t weights_size = sizeof(float) * params->num_weights;
     params->weights = (float*)malloc(weights_size);
     params->weight_grads = (float*)malloc(weights_size);
-    for(int i = 0; i < total_weight_count; i++)
+    for(int i = 0; i < params->num_weights; i++)
     {
         params->weights[i] = random_normal();
         params->weight_grads[i] = 0.0f;
@@ -71,9 +73,9 @@ params_t* init_params()
         params->activations_out[i] = 0.0f;
     }
 
-    const int num_inter_activations = (NUM_HIDDEN_LAYERS+1) * HIDDEN_DIM;
-    params->activations = (float*)malloc(sizeof(float) * num_inter_activations);
-    for(int i = 0; i < num_inter_activations; i++)
+    params->num_activations = (NUM_HIDDEN_LAYERS+1) * HIDDEN_DIM;
+    params->activations = (float*)malloc(sizeof(float) * params->num_activations);
+    for(int i = 0; i < params->num_activations; i++)
     {
         params->activations[i] = 0.0f;
     }
@@ -192,6 +194,19 @@ void print_output(float* out, const int n)
     printf("\n");
 }
 
+void print_layer(float* weights, const int width, const int height)
+{
+    int weight_offset = 0;
+    for(int i = 0; i < width; i++)
+    {
+        for(int k = 0; k < height; k++)
+        {
+            printf("%f ", weights[weight_offset++]);
+        }
+        printf("\n");
+    }
+}
+
 void forward_pass(params_t* params, float* in)
 {
     vec_mat_mul_sigmoid(params->weights, in, params->activations, INPUT_DIM, HIDDEN_DIM);
@@ -224,15 +239,43 @@ void forward_pass(params_t* params, float* in)
     print_output(params->activations_out, OUTPUT_DIM);
 }
 
+void backward_pass(params_t* params, float* out_grad)
+{
+    float activation_grad[HIDDEN_DIM] = {0.0f};
+    int activation_offset = params->num_activations - HIDDEN_DIM;
+    int weight_offset = params->num_weights - output_layer_weight_count;
+    vec_mat_mul_sigmoid_backward(
+        params->weights + weight_offset, 
+        params->activations + activation_offset,
+        params->activations_out,
+        out_grad,
+        params->weight_grads + weight_offset,
+        activation_grad,
+        HIDDEN_DIM,
+        OUTPUT_DIM
+    );
+    printf("Output layer grad:\n");
+    print_layer(params->weight_grads + weight_offset, HIDDEN_DIM, OUTPUT_DIM);
+}
+
 int main()
 {
     params_t* params = init_params();
     float in[INPUT_DIM] = {1.0f};
     forward_pass(params, in);
-    for(int i = 0; i < OUTPUT_DIM; i++)
-    {
-        printf("%f ", params->activations_out[i]);
-    }
+    
+    float out_grad[OUTPUT_DIM];
+    float loss;
+    float label[OUTPUT_DIM] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    mse(label, params->activations_out, &loss, OUTPUT_DIM);
+    mse_backward(label, params->activations_out, out_grad, OUTPUT_DIM);
+    
+    printf("MSE: %f\n", loss);
+    printf("MSE grad:\n");
+    print_output(out_grad, OUTPUT_DIM);
+
+    backward_pass(params, out_grad);
+
     free(params->activations_out);
     free(params->activations);
     free(params->weights);
