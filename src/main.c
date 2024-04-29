@@ -9,7 +9,7 @@
 #define HIDDEN_DIM 256
 #define OUTPUT_DIM 10
 #define BATCH_SIZE 1
-#define LEARNING_RATE 0.00003f
+#define LEARNING_RATE 0.000003f
 #define NUM_EPOCHS 10
 
 const int input_layer_weight_count = INPUT_DIM * HIDDEN_DIM;
@@ -318,20 +318,23 @@ int main()
     
     for(int k = 0; k < NUM_EPOCHS; k++)
     {
+        float accumulated_loss = 0.0f;
         for(int i = 0; i < MNIST_NUM_TRAIN; i++)
         {
             float out_grad[OUTPUT_DIM] = {0.0f};
             float loss = 0.0f;
-            float* in = &train_image[i];
+            float* in = train_image[i];
             float label[OUTPUT_DIM] = {0.0f};
             label[train_label[i]] = 1.0f;
 
             forward_pass(params, in);
             mse(label, params->activations_out, &loss, OUTPUT_DIM);
-            printf("MSE: %f\n", loss);
+            accumulated_loss += loss;
+            //printf("MSE: %f\n", loss);
             mse_backward(label, params->activations_out, out_grad, OUTPUT_DIM);
             backward_pass(params, in, out_grad, LEARNING_RATE);
         }
+        printf("Epoch %d, Loss %f", k, accumulated_loss/MNIST_NUM_TRAIN);
     }
 
     free(params->activations_out);
