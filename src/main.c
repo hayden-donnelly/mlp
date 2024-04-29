@@ -250,7 +250,7 @@ void forward_pass(params_t* params, float* in)
     //print_output(params->activations_out, OUTPUT_DIM);
 }
 
-void backward_pass(params_t* params, float* out_grad, const float learning_rate)
+void backward_pass(params_t* params, float* vec_in, float* out_grad, const float learning_rate)
 {
     float activation_grad[HIDDEN_DIM] = {0.0f};
     int activation_offset = params->num_activations - HIDDEN_DIM;
@@ -299,25 +299,48 @@ void backward_pass(params_t* params, float* out_grad, const float learning_rate)
         //print_output(activation_grad, HIDDEN_DIM);
         activation_offset = next_activation_offset;
     }
+
+    float in_grad[INPUT_DIM] = {0.0f};
+    vec_mat_mul_sigmoid_backward(
+        params->weights,
+        vec_in,
+        params->activations,
+        activation_grad,
+        params->weight_grads,
+        in_grad,
+        INPUT_DIM,
+        HIDDEN_DIM
+    );
+    update_weights(
+        params->weights,
+        params->weight_grads,
+        learning_rate,
+        HIDDEN_DIM*OUTPUT_DIM
+    );
 }
 
 int main()
 {
+    load_mnist();
     params_t* params = init_params();
-    float in[INPUT_DIM] = {1.0f};
-    forward_pass(params, in);
     
-    float out_grad[OUTPUT_DIM];
-    float loss;
-    float label[OUTPUT_DIM] = {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    mse(label, params->activations_out, &loss, OUTPUT_DIM);
-    mse_backward(label, params->activations_out, out_grad, OUTPUT_DIM);
-    
-    printf("MSE: %f\n", loss);
-    printf("MSE grad:\n");
-    print_output(out_grad, OUTPUT_DIM);
+    for(int i = 0; i < MNIST_NUM_TRAIN; i++)
+    {
+        float out_grad[OUTPUT_DIM] = {0.0f};
+        float loss = 0.0f;
+        float* in = &train_image[i];
+        float label[OUTPUT_DIM] = {0.0f};
+        label[train_label[i]] = 1.0f;
 
-    backward_pass(params, out_grad, LEARNING_RATE);
+        forward_pass(params, in);
+        mse(label, params->activations_out, &loss, OUTPUT_DIM);
+        printf("MSE: %f\n", loss);
+        mse_backward(label, params->activations_out, out_grad, OUTPUT_DIM);
+        backward_pass(params, in, out_grad, LEARNING_RATE);
+    }
+    
+    //printf("MSE grad:\n");
+    //print_output(out_grad, OUTPUT_DIM);
 
     free(params->activations_out);
     free(params->activations);
