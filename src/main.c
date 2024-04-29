@@ -9,7 +9,8 @@
 #define HIDDEN_DIM 256
 #define OUTPUT_DIM 10
 #define BATCH_SIZE 1
-#define LEARNING_RATE 0.0003f
+#define LEARNING_RATE 0.00003f
+#define NUM_EPOCHS 10
 
 const int input_layer_weight_count = INPUT_DIM * HIDDEN_DIM;
 const int hidden_layer_weight_count = HIDDEN_DIM * HIDDEN_DIM;
@@ -221,8 +222,6 @@ void update_weights(
 void forward_pass(params_t* params, float* in)
 {
     vec_mat_mul_sigmoid(params->weights, in, params->activations, INPUT_DIM, HIDDEN_DIM);
-    //printf("Input layer:\n");
-    //print_output(params->activations, HIDDEN_DIM);
     int activations_offset = 0;
     int weight_offset = input_layer_weight_count;
     for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
@@ -235,7 +234,6 @@ void forward_pass(params_t* params, float* in)
             HIDDEN_DIM,
             HIDDEN_DIM
         );
-        //print_output(params->activations + next_activations_offset, HIDDEN_DIM);
         activations_offset = next_activations_offset;
         weight_offset += hidden_layer_weight_count;
     }
@@ -246,8 +244,6 @@ void forward_pass(params_t* params, float* in)
         HIDDEN_DIM,
         OUTPUT_DIM
     );
-    //printf("Output layer:\n");
-    //print_output(params->activations_out, OUTPUT_DIM);
 }
 
 void backward_pass(params_t* params, float* vec_in, float* out_grad, const float learning_rate)
@@ -271,8 +267,7 @@ void backward_pass(params_t* params, float* vec_in, float* out_grad, const float
         learning_rate,
         HIDDEN_DIM*OUTPUT_DIM
     );
-    //printf("Output layer grad:\n");
-    //print_layer(params->weight_grads + weight_offset, HIDDEN_DIM, OUTPUT_DIM);
+    
     activation_offset -= HIDDEN_DIM;
     for(int i = 0; i < NUM_HIDDEN_LAYERS; i++)
     {
@@ -292,11 +287,8 @@ void backward_pass(params_t* params, float* vec_in, float* out_grad, const float
             params->weights + weight_offset,
             params->weight_grads + weight_offset,
             learning_rate,
-            HIDDEN_DIM*OUTPUT_DIM
+            HIDDEN_DIM*HIDDEN_DIM
         );
-
-        //printf("\nHidden layer %d activation grad:\n", NUM_HIDDEN_LAYERS - (i+1));
-        //print_output(activation_grad, HIDDEN_DIM);
         activation_offset = next_activation_offset;
     }
 
@@ -315,7 +307,7 @@ void backward_pass(params_t* params, float* vec_in, float* out_grad, const float
         params->weights,
         params->weight_grads,
         learning_rate,
-        HIDDEN_DIM*OUTPUT_DIM
+        INPUT_DIM*HIDDEN_DIM
     );
 }
 
@@ -324,23 +316,23 @@ int main()
     load_mnist();
     params_t* params = init_params();
     
-    for(int i = 0; i < MNIST_NUM_TRAIN; i++)
+    for(int k = 0; k < NUM_EPOCHS; k++)
     {
-        float out_grad[OUTPUT_DIM] = {0.0f};
-        float loss = 0.0f;
-        float* in = &train_image[i];
-        float label[OUTPUT_DIM] = {0.0f};
-        label[train_label[i]] = 1.0f;
+        for(int i = 0; i < MNIST_NUM_TRAIN; i++)
+        {
+            float out_grad[OUTPUT_DIM] = {0.0f};
+            float loss = 0.0f;
+            float* in = &train_image[i];
+            float label[OUTPUT_DIM] = {0.0f};
+            label[train_label[i]] = 1.0f;
 
-        forward_pass(params, in);
-        mse(label, params->activations_out, &loss, OUTPUT_DIM);
-        printf("MSE: %f\n", loss);
-        mse_backward(label, params->activations_out, out_grad, OUTPUT_DIM);
-        backward_pass(params, in, out_grad, LEARNING_RATE);
+            forward_pass(params, in);
+            mse(label, params->activations_out, &loss, OUTPUT_DIM);
+            printf("MSE: %f\n", loss);
+            mse_backward(label, params->activations_out, out_grad, OUTPUT_DIM);
+            backward_pass(params, in, out_grad, LEARNING_RATE);
+        }
     }
-    
-    //printf("MSE grad:\n");
-    //print_output(out_grad, OUTPUT_DIM);
 
     free(params->activations_out);
     free(params->activations);
