@@ -84,11 +84,6 @@ params_t* init_params()
     return params;
 }
 
-static inline void scalar_relu(float* a)
-{
-    *a = (*a > 0.0f) ? *a : 0.0f;
-}
-
 static inline void sigmoid(float *a)
 {
     *a = 1.0f / (1.0f + (float)exp(-(double)*a));
@@ -144,27 +139,6 @@ static inline void vec_mat_mul_sigmoid_backward(
             // dL/dW_ij = x_j * dL/df_i.
             mat_grad[mat_grad_offset++] = vec_in[in_idx] * vec_mat_mul_grad[out_idx];
         }
-    }
-}
-
-static inline void vec_mat_mul_softmax(
-    float* mat, float* vec_in, float* vec_out, 
-    const int in_dim, const int out_dim
-){
-    int mat_offset = 0;
-    double exp_layer_sum = 0.0f;
-    for(int out_idx = 0; out_idx < out_dim; out_idx++)
-    {
-        vec_out[out_idx] = 0.0f;
-        for(int in_idx = 0; in_idx < in_dim; in_idx++)
-        {
-            vec_out[out_idx] += mat[mat_offset++] * vec_in[in_idx];
-        }
-        exp_layer_sum += exp((double)vec_out[out_idx]);
-    }
-    for(int i = 0; i < out_dim; i++)
-    {
-        vec_out[i] = (float)(exp((double)vec_out[i]) / exp_layer_sum); 
     }
 }
 
