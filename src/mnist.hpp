@@ -31,10 +31,10 @@
 #include <string.h>
 
 // set appropriate path for data
-#define MNIST_TRAIN_IMAGE_PATH "./data/train-images-idx3-ubyte"
-#define MNIST_TRAIN_LABEL_PATH "./data/train-labels-idx1-ubyte"
-#define MNIST_TEST_IMAGE_PATH "./data/t10k-images-idx3-ubyte"
-#define MNIST_TEST_LABEL_PATH "./data/t10k-labels-idx1-ubyte"
+#define MNIST_TRAIN_IMAGE_PATH "../data/train-images-idx3-ubyte"
+#define MNIST_TRAIN_LABEL_PATH "../data/train-labels-idx1-ubyte"
+#define MNIST_TEST_IMAGE_PATH "../data/t10k-images-idx3-ubyte"
+#define MNIST_TEST_LABEL_PATH "../data/t10k-labels-idx1-ubyte"
 
 #define MNIST_VEC_SIZE 784 // 28*28
 #define MNIST_NUM_TRAIN 60000
@@ -71,8 +71,8 @@ void flip_long(unsigned char* ptr)
     *(ptr+1) = val;
 }
 
-void read_mnist_char(
-    char *file_path, int num_data, int len_info, int arr_n, 
+template<int arr_n> void read_mnist_char(
+    char *file_path, int num_data, int len_info, 
     unsigned char data_char[][arr_n], int info_arr[]
 ){
     int i, j, k, fd;
@@ -129,27 +129,27 @@ void label_char2int(int num_data, unsigned char data_label_char[][1], int data_l
 
 void load_mnist()
 {
-    read_mnist_char(
+    read_mnist_char<MNIST_VEC_SIZE>(
         MNIST_TRAIN_IMAGE_PATH, MNIST_NUM_TRAIN, 
-        LEN_INFO_IMAGE, MNIST_VEC_SIZE, train_image_char, info_image
+        LEN_INFO_IMAGE, train_image_char, info_image
     );
     image_char2double(MNIST_NUM_TRAIN, train_image_char, train_image);
 
-    read_mnist_char(
+    read_mnist_char<MNIST_VEC_SIZE>(
         MNIST_TEST_IMAGE_PATH, MNIST_NUM_TEST, 
-        LEN_INFO_IMAGE, MNIST_VEC_SIZE, test_image_char, info_image
+        LEN_INFO_IMAGE, test_image_char, info_image
     );
     image_char2double(MNIST_NUM_TEST, test_image_char, test_image);
     
-    read_mnist_char(
+    read_mnist_char<1>(
         MNIST_TRAIN_LABEL_PATH, MNIST_NUM_TRAIN, 
-        LEN_INFO_LABEL, 1, train_label_char, info_label
+        LEN_INFO_LABEL, train_label_char, info_label
     );
     label_char2int(MNIST_NUM_TRAIN, train_label_char, train_label);
     
-    read_mnist_char(
+    read_mnist_char<1>(
         MNIST_TEST_LABEL_PATH, MNIST_NUM_TEST, 
-        LEN_INFO_LABEL, 1, test_label_char, info_label
+        LEN_INFO_LABEL, test_label_char, info_label
     );
     label_char2int(MNIST_NUM_TEST, test_label_char, test_label);
 }
