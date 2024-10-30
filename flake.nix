@@ -32,6 +32,7 @@
                     stdenv.cc.cc
                     clang-tools
                     cudatoolkit
+                    cudaPackages.cudnn
                     gcc12
                 ];
                 shellHook = ''

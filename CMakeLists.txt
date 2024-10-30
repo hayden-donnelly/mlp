@@ -15,8 +15,8 @@ set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-O3;-arch=sm_86)
 add_executable(mlp_cpu src/mlp_cpu.cpp)
 target_include_directories(mlp_cpu PRIVATE ./src/)
 
-# CUDA executable
+# cuDNN executable
 cuda_add_executable(mlp_cudnn ./src/mlp_cudnn.cu)
 set_target_properties(mlp_cudnn PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(mlp_cudnn PRIVATE ./src/)
-target_link_libraries(mlp_cudnn cuda cudart)
+target_link_libraries(mlp_cudnn cuda cudart cudnn)
