@@ -292,7 +292,7 @@ int main()
     {
         for(int j = 0; j < 28; ++j)
         {
-            float f = train_image[][i*28 + j];
+            float f = train_image[2][i*28 + j];
             char c = (f > 0.1f) ? 'N' : ' ';
             printf("%c", c);
         }
