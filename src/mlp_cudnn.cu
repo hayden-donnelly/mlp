@@ -2,6 +2,7 @@
 #include <cudnn.h>
 #include <iostream>
 #include <cstdio>
+#include "mnist.hpp"
 
 #define CHECK_CUDNN(expression) \
 { \
@@ -19,4 +20,11 @@ int main()
     cudnnHandle_t cudnn;
     CHECK_CUDNN(cudnnCreate(&cudnn));
     printf("Initialized cuDNN\n");
+
+    load_mnist();
+    print_image(train_image[2]);
+
+    constexpr int input_dim = 784;
+    constexpr int hidden_dim = 256;
+    constexpr int output_dim = 10;
 }

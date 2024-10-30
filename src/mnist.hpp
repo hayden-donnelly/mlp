@@ -36,7 +36,8 @@
 #define MNIST_TEST_IMAGE_PATH "../data/t10k-images-idx3-ubyte"
 #define MNIST_TEST_LABEL_PATH "../data/t10k-labels-idx1-ubyte"
 
-#define MNIST_VEC_SIZE 784 // 28*28
+#define MNIST_SIDE_LENGTH 28
+#define MNIST_VEC_SIZE (MNIST_SIDE_LENGTH * MNIST_SIDE_LENGTH)
 #define MNIST_NUM_TRAIN 60000
 #define MNIST_NUM_TEST 10000
 #define LEN_INFO_IMAGE 4
@@ -152,4 +153,19 @@ void load_mnist()
         LEN_INFO_LABEL, test_label_char, info_label
     );
     label_char2int(MNIST_NUM_TEST, test_label_char, test_label);
+}
+
+void print_image(const float* image)
+{
+    static const float threshold = 0.1f;
+    for(int i = 0; i < MNIST_SIDE_LENGTH; ++i)
+    {
+        for(int j = 0; j < MNIST_SIDE_LENGTH; ++j)
+        {
+            float f = image[i*MNIST_SIDE_LENGTH + j];
+            char c = (f > 0.1f) ? 'N' : ' ';
+            printf("%c", c);
+        }
+        printf("\n");
+    }
 }

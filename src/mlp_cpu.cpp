@@ -288,16 +288,7 @@ void backward_pass(params_t* params, float* vec_in, float* out_grad, const float
 int main()
 {
     load_mnist();
-    for(int i = 0; i < 28; ++i)
-    {
-        for(int j = 0; j < 28; ++j)
-        {
-            float f = train_image[2][i*28 + j];
-            char c = (f > 0.1f) ? 'N' : ' ';
-            printf("%c", c);
-        }
-        printf("\n");
-    }
+    print_image(train_image[2]);
     params_t* params = init_params();
     
     for(int k = 0; k < NUM_EPOCHS; k++)
