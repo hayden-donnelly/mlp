@@ -2,7 +2,7 @@
     description = "MLP training";
 
     inputs = {
-        nixpkgs.url = "github:nixos/nixpkgs/24.05";
+        nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
         nixgl.url = "github:nix-community/nixGL";
         flake-utils.url = "github:numtide/flake-utils";
     };
@@ -31,12 +31,13 @@
                 buildInputs = with pkgs; [
                     stdenv.cc.cc
                     clang-tools
-                    cudatoolkit
+                    cudaPackages.cudatoolkit
+                    cudaPackages.cuda_cudart
                     cudaPackages.cudnn
                     gcc12
                 ];
                 shellHook = ''
-                    export CUDA_PATH=${pkgs.cudatoolkit}
+                    export CUDA_PATH=${pkgs.cudaPackages.cudatoolkit}
                     source <(sed -Ee '/\$@/d' ${lib.getExe pkgs.nixgl.nixGLIntel})
                     source <(sed -Ee '/\$@/d' ${lib.getExe pkgs.nixgl.auto.nixGLNvidia}*)
                 '';
