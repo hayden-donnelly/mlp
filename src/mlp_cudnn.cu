@@ -77,7 +77,7 @@ void fc_layer_create(
         fc->matmul_desc, CUDNN_ATTR_MATMUL_COMP_TYPE, CUDNN_TYPE_DATA_TYPE, 1, &comp_type
     ));
 
-    CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_OPERATION_MATMUL_DESCRIPTOR, &fc->matmul_desc));
+    CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_OPERATION_MATMUL_DESCRIPTOR, &fc->matmul_op_desc));
     CHECK_CUDNN(cudnnBackendSetAttribute(
         fc->matmul_op_desc, CUDNN_ATTR_OPERATION_MATMUL_ADESC, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, input_desc 
     ));
