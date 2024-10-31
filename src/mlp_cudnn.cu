@@ -132,7 +132,17 @@ int main()
     fc_layer_t fc2;
     fc_layer_create(batch_size, hidden_dim, output_dim, &tensor_count, &fc2, &fc1.output_desc); 
     printf("Created fc2\ntensor_count: %ld\n", tensor_count);
-    
+ 
+    cudnnBackendDescriptor_t op_graph;
+    CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_OPERATIONGRAPH_DESCRIPTOR, &op_graph));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        op_graph, CUDNN_ATTR_OPERATIONGRAPH_OPS, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &fc2.matmul_op_desc
+    ));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        op_graph, CUDNN_ATTR_OPERATIONGRAPH_HANDLE, CUDNN_TYPE_HANDLE, 1, &cudnn
+    ));
+    CHECK_CUDNN(cudnnBackendFinalize(op_graph));
+   
     printf("Created graph\n");
     printf("Final tensor_count: %ld\n", tensor_count);
 

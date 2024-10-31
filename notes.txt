@@ -1,0 +1,1 @@
+https://docs.nvidia.com/deeplearning/cudnn/latest/api/cudnn-graph-library.html#setting-up-an-operation-graph-for-a-grouped-convolution
