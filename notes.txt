@@ -1,1 +1,5 @@
 https://docs.nvidia.com/deeplearning/cudnn/latest/api/cudnn-graph-library.html#setting-up-an-operation-graph-for-a-grouped-convolution
+
+https://docs.nvidia.com/deeplearning/cudnn/latest/api/cudnn-graph-library.html#cudnnbackendattributetype-t
+
+Use CUDNN_LOGLEVEL_DBG=<1, 2, or 3> environment variable to get detailed cuDNN logs.
