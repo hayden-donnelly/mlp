@@ -41,7 +41,7 @@ void tensor_2d_create(
     int64_t n_dims = 2;
     int64_t shape[] = {dim0, dim1};
     int64_t strides[] = {dim1, 1};
-    int64_t alignment = 4;
+    int64_t alignment = 16;
     int64_t uid = (*tensor_count)++;;
 
     cudnnDataType_t data_type = CUDNN_DATA_FLOAT;
@@ -76,6 +76,7 @@ void fc_layer_create(
     CHECK_CUDNN(cudnnBackendSetAttribute(
         fc->matmul_desc, CUDNN_ATTR_MATMUL_COMP_TYPE, CUDNN_TYPE_DATA_TYPE, 1, &comp_type
     ));
+    CHECK_CUDNN(cudnnBackendFinalize(fc->matmul_desc));
 
     CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_OPERATION_MATMUL_DESCRIPTOR, &fc->matmul_op_desc));
     CHECK_CUDNN(cudnnBackendSetAttribute(
@@ -87,16 +88,19 @@ void fc_layer_create(
     CHECK_CUDNN(cudnnBackendSetAttribute(
         fc->matmul_op_desc, CUDNN_ATTR_OPERATION_MATMUL_CDESC, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &fc->output_desc
     ));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        fc->matmul_op_desc, CUDNN_ATTR_OPERATION_MATMUL_DESC, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &fc->matmul_desc
+    ));
     CHECK_CUDNN(cudnnBackendFinalize(fc->matmul_op_desc));
 }
 
-int main()
+int main_old()
 {
     cudnnHandle_t cudnn;
     CHECK_CUDNN(cudnnCreate(&cudnn));
     printf("Initialized cuDNN\n");
     printf("cuDNN version: %zu\n", cudnnGetVersion());
-    
+
     load_mnist();
     printf("Loaded MNIST\n");
     print_image(train_image[2]);
@@ -122,6 +126,7 @@ int main()
     CHECK_CUDA(cudaMalloc(&d_hidden, sizeof(float) * batch_size * hidden_dim));
     CHECK_CUDA(cudaMalloc(&d_output, sizeof(float) * batch_size * output_dim));
 
+    // Create graph ops and tensors.
     int64_t tensor_count = 0;
     cudnnBackendDescriptor_t input_desc;
     tensor_2d_create(batch_size, input_dim, &tensor_count, &input_desc);
@@ -129,26 +134,33 @@ int main()
     fc_layer_t fc1;
     fc_layer_create(batch_size, input_dim, hidden_dim, &tensor_count, &fc1, &input_desc);
     printf("Created fc1\ntensor_count: %ld\n", tensor_count);
-    fc_layer_t fc2;
+    /*fc_layer_t fc2;
     fc_layer_create(batch_size, hidden_dim, output_dim, &tensor_count, &fc2, &fc1.output_desc); 
     printf("Created fc2\ntensor_count: %ld\n", tensor_count);
-    printf("Final tensor_count: %ld\n", tensor_count);
+    printf("Final tensor_count: %ld\n", tensor_count);*/
     
+    // Create op graph.
+    //cudnnBackendDescriptor_t ops[] = {fc1.matmul_op_desc, fc2.matmul_op_desc};
     cudnnBackendDescriptor_t op_graph;
     CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_OPERATIONGRAPH_DESCRIPTOR, &op_graph));
     CHECK_CUDNN(cudnnBackendSetAttribute(
-        op_graph, CUDNN_ATTR_OPERATIONGRAPH_OPS, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &fc2.matmul_op_desc
+        op_graph, CUDNN_ATTR_OPERATIONGRAPH_OPS, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &fc1.matmul_op_desc
     ));
     CHECK_CUDNN(cudnnBackendSetAttribute(
         op_graph, CUDNN_ATTR_OPERATIONGRAPH_HANDLE, CUDNN_TYPE_HANDLE, 1, &cudnn
     ));
     CHECK_CUDNN(cudnnBackendFinalize(op_graph));
     printf("Created graph\n");
-
+    
+    // Create engine.
+    cudnnBackendBehaviorNote_t behavior = CUDNN_BEHAVIOR_NOTE_RUNTIME_COMPILATION;
     cudnnBackendDescriptor_t engine;
     CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_ENGINE_DESCRIPTOR, &engine));
     CHECK_CUDNN(cudnnBackendSetAttribute(
         engine, CUDNN_ATTR_ENGINE_OPERATION_GRAPH, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &op_graph
+    ));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        engine, CUDNN_ATTR_ENGINE_BEHAVIOR_NOTE, CUDNN_TYPE_BEHAVIOR_NOTE, 1, &behavior
     ));
     int64_t gid = 0;
     CHECK_CUDNN(cudnnBackendSetAttribute(
@@ -156,6 +168,58 @@ int main()
     ));
     CHECK_CUDNN(cudnnBackendFinalize(engine));
     printf("Created engine\n");
-
+    
+    // Create engine config.
+    cudnnBackendDescriptor_t engine_cfg;
+    CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_ENGINECFG_DESCRIPTOR, &engine_cfg));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        engine_cfg, CUDNN_ATTR_ENGINECFG_ENGINE, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &engine
+    ));
+    CHECK_CUDNN(cudnnBackendFinalize(engine_cfg));
+    int64_t workspace_size;
+    CHECK_CUDNN(cudnnBackendGetAttribute(
+        engine_cfg, CUDNN_ATTR_ENGINECFG_WORKSPACE_SIZE, CUDNN_TYPE_INT64, 1, NULL, &workspace_size
+    ));
+    
     CHECK_CUDNN(cudnnDestroy(cudnn));
+}
+
+int main()
+{
+    cudnnHandle_t cudnn;
+    CHECK_CUDNN(cudnnCreate(&cudnn));
+    printf("Initialized cuDNN\n");
+    printf("cuDNN version: %zu\n", cudnnGetVersion());
+
+    int64_t tensor_count = 0;
+    cudnnBackendDescriptor_t input_desc;
+    tensor_2d_create(1, 32, &tensor_count, &input_desc);
+    
+    cudnnBackendDescriptor_t output_desc;
+    tensor_2d_create(1, 32, &tensor_count, &output_desc);
+
+    cudnnPointwiseMode_t act_mode = CUDNN_POINTWISE_RELU_FWD;
+    cudnnDataType_t act_data_type = CUDNN_DATA_FLOAT;
+    cudnnBackendDescriptor_t relu_desc;
+    CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_POINTWISE_DESCRIPTOR, &relu_desc));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        relu_desc, CUDNN_ATTR_POINTWISE_MODE, CUDNN_TYPE_POINTWISE_MODE, 1, &act_mode
+    ));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        relu_desc, CUDNN_ATTR_POINTWISE_MATH_PREC, CUDNN_TYPE_DATA_TYPE, 1, &act_data_type
+    ));
+    CHECK_CUDNN(cudnnBackendFinalize(relu_desc));
+
+    cudnnBackendDescriptor_t relu_op_desc;
+    CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_OPERATION_POINTWISE_DESCRIPTOR, &relu_op_desc));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        relu_op_desc, CUDNN_ATTR_OPERATION_POINTWISE_PW_DESCRIPTOR, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &relu_desc
+    ));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        relu_op_desc, CUDNN_ATTR_OPERATION_POINTWISE_XDESC, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &input_desc
+    ));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        relu_op_desc, CUDNN_ATTR_OPERATION_POINTWISE_YDESC, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &output_desc
+    ));
+    CHECK_CUDNN(cudnnBackendFinalize(relu_op_desc));
 }
