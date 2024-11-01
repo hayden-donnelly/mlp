@@ -36,6 +36,24 @@ void random_normal_init(int height, int width, float* A, unsigned long seed)
     random_normal_init_kernel<<<grid_dim, block_dim>>>(A, n_elements, seed);
 }
 
+__global__ void zero_init_kernel(float* A, int n_elements)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(idx < n_elements)
+    {
+        A[idx] = 0.0f;
+    }
+}
+
+void zero_init(int height, int width, float* A)
+{
+    const int n_elements = height * width;
+    const int block_dim = 1024;
+    const int grid_dim = (n_elements + block_dim - 1) / block_dim;
+    zero_init_kernel<<<grid_dim, block_dim>>>(A, n_elements);
+}
+
 template<int tile_width>
 __global__ void fc_forward_kernel(
     const float* W, const float* X, float* Y, 
@@ -130,8 +148,12 @@ int main()
     CHECK_CUDA(cudaMalloc(&d_hidden, sizeof(float) * batch_size * hidden_dim));
     CHECK_CUDA(cudaMalloc(&d_output, sizeof(float) * batch_size * output_dim));
 
+    // Initialize weights and biases.
     random_normal_init(hidden_dim, input_dim, d_fc1_weights, 0);
-    device_to_host_and_print(hidden_dim, input_dim, d_fc1_weights);
+    random_normal_init(hidden_dim, output_dim, d_fc2_weights, 0);
+    zero_init(1, hidden_dim, d_fc1_bias);
+    zero_init(1, output_dim, d_fc2_bias);
+    device_to_host_and_print(output_dim, hidden_dim, d_fc2_weights);
 
     printf("Hello World\n");
 }
