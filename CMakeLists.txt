@@ -26,3 +26,9 @@ cuda_add_executable(mlp_cudnn_iso ./src/mlp_cudnn_iso.cu)
 set_target_properties(mlp_cudnn_iso PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 target_include_directories(mlp_cudnn_iso PRIVATE ./src/)
 target_link_libraries(mlp_cudnn_iso cuda cudart cudnn cublas)
+
+# CUDA Basic executable
+cuda_add_executable(mlp_cuda_basic ./src/mlp_cuda_basic.cu)
+set_target_properties(mlp_cudnn_iso PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_include_directories(mlp_cuda_basic PRIVATE ./src/)
+target_link_libraries(mlp_cudnn_iso cuda cudart)
