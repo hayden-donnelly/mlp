@@ -222,4 +222,49 @@ int main()
         relu_op_desc, CUDNN_ATTR_OPERATION_POINTWISE_YDESC, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &output_desc
     ));
     CHECK_CUDNN(cudnnBackendFinalize(relu_op_desc));
+    printf("Final tensor_count: %ld\n", tensor_count);
+
+    // Create op graph.
+    cudnnBackendDescriptor_t op_graph;
+    CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_OPERATIONGRAPH_DESCRIPTOR, &op_graph));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        op_graph, CUDNN_ATTR_OPERATIONGRAPH_OPS, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &relu_op_desc
+    ));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        op_graph, CUDNN_ATTR_OPERATIONGRAPH_HANDLE, CUDNN_TYPE_HANDLE, 1, &cudnn
+    ));
+    CHECK_CUDNN(cudnnBackendFinalize(op_graph));
+    printf("Created graph\n");
+
+    // Create engine.
+    //cudnnBackendBehaviorNote_t behavior = CUDNN_BEHAVIOR_NOTE_RUNTIME_COMPILATION;
+    cudnnBackendDescriptor_t engine;
+    CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_ENGINE_DESCRIPTOR, &engine));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        engine, CUDNN_ATTR_ENGINE_OPERATION_GRAPH, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &op_graph
+    ));
+    //CHECK_CUDNN(cudnnBackendSetAttribute(
+    //    engine, CUDNN_ATTR_ENGINE_BEHAVIOR_NOTE, CUDNN_TYPE_BEHAVIOR_NOTE, 1, &behavior
+    //));
+    int64_t gid = 0;
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        engine, CUDNN_ATTR_ENGINE_GLOBAL_INDEX, CUDNN_TYPE_INT64, 1, &gid
+    ));
+    CHECK_CUDNN(cudnnBackendFinalize(engine));
+    printf("Created engine\n");
+
+    // Create engine config.
+    cudnnBackendDescriptor_t engine_cfg;
+    CHECK_CUDNN(cudnnBackendCreateDescriptor(CUDNN_BACKEND_ENGINECFG_DESCRIPTOR, &engine_cfg));
+    CHECK_CUDNN(cudnnBackendSetAttribute(
+        engine_cfg, CUDNN_ATTR_ENGINECFG_ENGINE, CUDNN_TYPE_BACKEND_DESCRIPTOR, 1, &engine
+    ));
+    CHECK_CUDNN(cudnnBackendFinalize(engine_cfg));
+    int64_t workspace_size;
+    CHECK_CUDNN(cudnnBackendGetAttribute(
+        engine_cfg, CUDNN_ATTR_ENGINECFG_WORKSPACE_SIZE, CUDNN_TYPE_INT64, 1, NULL, &workspace_size
+    ));
+    printf("Created engine config\n");
+
+    CHECK_CUDNN(cudnnDestroy(cudnn));
 }
