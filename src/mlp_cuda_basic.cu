@@ -284,6 +284,8 @@ void forward_pass(mlp_t* mlp)
     device_to_host_and_print(batch_size, output_dim, mlp->fc2_b_inter);
     printf("probs:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->probs);
+    printf("ce_losses:\n");
+    device_to_host_and_print(batch_size, 1, mlp->ce_losses);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -367,12 +369,16 @@ int main()
     //printf("Initial output:\n");
     //device_to_host_and_print(batch_size, output_dim, mlp.output);
 
+    int batch_start_idx = 0;
     cudaMemcpy(
-        mlp.input, &train_image[0], 
+        mlp.input, &train_image[batch_start_idx], 
         sizeof(float) * input_dim * batch_size, cudaMemcpyHostToDevice
+    );
+    cudaMemcpy(
+        mlp.labels, &train_label[batch_start_idx], 
+        sizeof(int) * batch_size, cudaMemcpyHostToDevice
     );
     //device_to_host_and_print(batch_size, input_dim, mlp.input);
     forward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
     //printf("First pass output:\n");
-    //device_to_host_and_print(batch_size, output_dim, mlp.output);
 }
