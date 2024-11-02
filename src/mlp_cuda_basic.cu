@@ -39,12 +39,18 @@ struct mlp_t
     int hidden_dim;
     int output_dim;
     int batch_size;
+    
     float* fc1_w;
     float* fc1_b;
     float* fc2_w;
     float* fc2_b;
+    
     float* input;
-    float* hidden;
+    float* fc1_w_inter;
+    float* fc1_b_inter;
+    float* relu_inter;
+    float* fc2_w_inter;
+    float* fc2_b_inter;
     float* output;
 };
 
@@ -107,7 +113,7 @@ __global__ void fc_forward_kernel(
 }
 
 template<int tile_width> 
-void fc_forward(
+void fc_forward_launch(
     const float* W, const float* X, float* Y,
     int input_dim, int output_dim, int batch_size 
 ){
@@ -118,24 +124,50 @@ void fc_forward(
     fc_forward_kernel<tile_width><<<grid_dim, block_dim>>>(W, X, Y, input_dim, output_dim, batch_size);
 }
 
+__global__ void relu_forward_kernel(const float* X, float* Y, int input_dim, int batch_size)
+{
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(col < input_dim && row < batch_size)
+    {
+        int idx = row*input_dim + col;
+        float X_val = X[idx];
+        Y[row*input_dim + col] = (X_val > 0.0f) ? X_val : 0.0f;
+    }
+}
+
+void relu_forward_launch(const float* X, float* Y, int input_dim, int batch_size)
+{
+    const int block_x = (input_dim + 31) / 32;
+    dim3 grid_dim((input_dim + block_x - 1) / block_x, batch_size);
+    dim3 block_dim(block_x, 1);
+    relu_forward_kernel<<<grid_dim, block_dim>>>(X, Y, input_dim, batch_size);
+}
+
 template<int tile_width> 
 void forward_pass(mlp_t* mlp)
 {
-    fc_forward<tile_width>(
-        (const float*)mlp->fc1_w, (const float*)mlp->input, mlp->hidden,
+    fc_forward_launch<tile_width>(
+        (const float*)mlp->fc1_w, (const float*)mlp->input, mlp->fc1_w_inter,
         mlp->input_dim, mlp->hidden_dim, mlp->batch_size
     );
-    printf("Hidden:\n");
-    device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->hidden);
+    relu_forward_launch((const float*)mlp->fc1_w_inter, mlp->relu_inter, mlp->hidden_dim, mlp->batch_size);
+    printf("fc1_w_inter:\n");
+    device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->fc1_w_inter);
+    printf("\n");
+    printf("relu_inter:\n");
+    device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->relu_inter);
+    printf("\n");
     // TODO:
     // bias
     // relu
-    fc_forward<tile_width>(
-        (const float*)mlp->fc2_w, (const float*)mlp->hidden, mlp->output,
+    fc_forward_launch<tile_width>(
+        (const float*)mlp->fc2_w, (const float*)mlp->fc1_w_inter, mlp->output,
         mlp->hidden_dim, mlp->output_dim, mlp->batch_size
     );
-    printf("Output:\n");
-    device_to_host_and_print(mlp->batch_size, mlp->output_dim, mlp->hidden);
+    printf("output:\n");
+    device_to_host_and_print(mlp->batch_size, mlp->output_dim, mlp->output);
     // TODO:
     // softmax
 }
@@ -201,7 +233,11 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.fc1_b, sizeof(float) * hidden_dim));
     CHECK_CUDA(cudaMalloc(&mlp.fc2_b, sizeof(float) * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.input, sizeof(float) * batch_size * input_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.hidden, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.fc1_w_inter, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.fc1_b_inter, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.relu_inter, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.fc2_w_inter, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.fc2_b_inter, sizeof(float) * batch_size * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.output, sizeof(float) * batch_size * output_dim));
 
     // Initialize weights and biases.
