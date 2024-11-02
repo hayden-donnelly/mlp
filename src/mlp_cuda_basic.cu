@@ -52,7 +52,9 @@ struct mlp_t
     float* relu_inter;
     float* fc2_w_inter;
     float* fc2_b_inter;
-    float* output;
+    float* probs;
+    float* ce_losses;
+    int* labels;
 };
 
 template<int tile_width>
@@ -222,6 +224,25 @@ void softmax_forward_launch(const float* X, float* Y)
     softmax_forward_kernel<rows_per_block, input_dim, batch_size><<<grid_dim, block_dim>>>(X, Y);
 }
 
+__global__ void cross_entropy_forward_kernel(
+    const float* X, const int* T, float* Y, int n_classes, int batch_size
+){
+    constexpr float eps = 0.00001f;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if(idx < batch_size)
+    {
+        Y[idx] = -1.0f * __logf(X[idx * n_classes + T[idx]] + eps);
+    }
+}
+
+void cross_entropy_forward_launch(const float* X, const int* T, float* Y, int n_classes, int batch_size)
+{
+    dim3 grid_dim(1);
+    dim3 block_dim(ceil(batch_size / (float)32) * 32);
+    //printf("block_dim: (%d, %d)\ngrid_dim: (%d, %d)\n", block_dim.x, block_dim.y, grid_dim.x, grid_dim.y);
+    cross_entropy_forward_kernel<<<grid_dim, block_dim>>>(X, T, Y, n_classes, batch_size);
+}
+
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
@@ -255,11 +276,14 @@ void forward_pass(mlp_t* mlp)
         (const float*)mlp->fc2_b, (const float*)mlp->fc2_w_inter, mlp->fc2_b_inter, 
         output_dim, batch_size
     );
-    softmax_forward_launch<output_dim, batch_size>((const float*)mlp->fc2_b_inter, mlp->output);
+    softmax_forward_launch<output_dim, batch_size>((const float*)mlp->fc2_b_inter, mlp->probs);
+    cross_entropy_forward_launch(
+        (const float*)mlp->probs, (const int*)mlp->labels, mlp->ce_losses, 10, batch_size
+    );
     printf("fc2_b_inter:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->fc2_b_inter);
-    printf("output:\n");
-    device_to_host_and_print(batch_size, output_dim, mlp->output);
+    printf("probs:\n");
+    device_to_host_and_print(batch_size, output_dim, mlp->probs);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -310,7 +334,7 @@ int main()
     constexpr int input_dim = 784;
     constexpr int hidden_dim = 256;
     constexpr int output_dim = 10;
-    constexpr int batch_size = 2;
+    constexpr int batch_size = 4;
     constexpr int tile_width = 32;
 
     mlp_t mlp;
@@ -328,15 +352,17 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.relu_inter, sizeof(float) * batch_size * hidden_dim));
     CHECK_CUDA(cudaMalloc(&mlp.fc2_w_inter, sizeof(float) * batch_size * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.fc2_b_inter, sizeof(float) * batch_size * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.output, sizeof(float) * batch_size * output_dim));
-
+    CHECK_CUDA(cudaMalloc(&mlp.probs, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.ce_losses, sizeof(float) * batch_size));
+    CHECK_CUDA(cudaMalloc(&mlp.labels, sizeof(int) * batch_size));
+    
     // Initialize weights and biases.
     random_normal_init(hidden_dim, input_dim, mlp.fc1_w, 0);
     random_normal_init(hidden_dim, output_dim, mlp.fc2_w, 0);
     zero_init(1, hidden_dim, mlp.fc1_b);
     zero_init(1, output_dim, mlp.fc2_b);
-    zero_init(batch_size, hidden_dim, mlp.output);
-    zero_init(1, output_dim, mlp.output);
+    //zero_init(batch_size, hidden_dim, mlp.output);
+    zero_init(1, output_dim, mlp.probs);
     printf("Initialized weights and biases\n");
     //printf("Initial output:\n");
     //device_to_host_and_print(batch_size, output_dim, mlp.output);
