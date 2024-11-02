@@ -123,7 +123,6 @@ void fc_forward_launch(
     const int block_size = 32;
     dim3 grid_dim((output_dim + tile_width - 1) / tile_width, (batch_size + tile_width - 1) / tile_width);
     dim3 block_dim(tile_width, tile_width);
-    //printf("block_dim: (%d, %d)\ngrid_dim: (%d, %d)\n", block_dim.x, block_dim.y, grid_dim.x, grid_dim.y);
     fc_forward_kernel<tile_width><<<grid_dim, block_dim>>>(W, X, Y, input_dim, output_dim, batch_size);
 }
 
@@ -220,7 +219,6 @@ void softmax_forward_launch(const float* X, float* Y)
     constexpr int rows_per_block = (6 > batch_size) ? batch_size: 6;
     dim3 grid_dim((batch_size + rows_per_block - 1) / rows_per_block);
     dim3 block_dim(ceil((rows_per_block * input_dim) / (float)32) * 32);
-    //printf("block_dim: (%d, %d)\ngrid_dim: (%d, %d)\n", block_dim.x, block_dim.y, grid_dim.x, grid_dim.y);
     softmax_forward_kernel<rows_per_block, input_dim, batch_size><<<grid_dim, block_dim>>>(X, Y);
 }
 
@@ -239,7 +237,6 @@ void cross_entropy_forward_launch(const float* X, const int* T, float* Y, int n_
 {
     dim3 grid_dim(1);
     dim3 block_dim(ceil(batch_size / (float)32) * 32);
-    //printf("block_dim: (%d, %d)\ngrid_dim: (%d, %d)\n", block_dim.x, block_dim.y, grid_dim.x, grid_dim.y);
     cross_entropy_forward_kernel<<<grid_dim, block_dim>>>(X, T, Y, n_classes, batch_size);
 }
 
@@ -363,11 +360,8 @@ int main()
     random_normal_init(hidden_dim, output_dim, mlp.fc2_w, 0);
     zero_init(1, hidden_dim, mlp.fc1_b);
     zero_init(1, output_dim, mlp.fc2_b);
-    //zero_init(batch_size, hidden_dim, mlp.output);
     zero_init(1, output_dim, mlp.probs);
     printf("Initialized weights and biases\n");
-    //printf("Initial output:\n");
-    //device_to_host_and_print(batch_size, output_dim, mlp.output);
 
     int batch_start_idx = 0;
     cudaMemcpy(
@@ -378,7 +372,5 @@ int main()
         mlp.labels, &train_label[batch_start_idx], 
         sizeof(int) * batch_size, cudaMemcpyHostToDevice
     );
-    //device_to_host_and_print(batch_size, input_dim, mlp.input);
     forward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
-    //printf("First pass output:\n");
 }
