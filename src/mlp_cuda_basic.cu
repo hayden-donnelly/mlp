@@ -124,6 +124,26 @@ void fc_forward_launch(
     fc_forward_kernel<tile_width><<<grid_dim, block_dim>>>(W, X, Y, input_dim, output_dim, batch_size);
 }
 
+__global__ void bias_forward_kernel(const float* B, const float* X, float* Y, int input_dim, int batch_size)
+{
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if(col < input_dim && row < batch_size)
+    {
+        int idx = row*input_dim + col;
+        Y[row*input_dim + col] = X[idx] + B[col];
+    }
+}
+
+void bias_forward_launch(const float* B, const float* X, float* Y, int input_dim, int batch_size)
+{
+    const int block_x = (input_dim + 31) / 32;
+    dim3 grid_dim((input_dim + block_x - 1) / block_x, batch_size);
+    dim3 block_dim(block_x, 1);
+    bias_forward_kernel<<<grid_dim, block_dim>>>(B, X, Y, input_dim, batch_size);
+}
+
 __global__ void relu_forward_kernel(const float* X, float* Y, int input_dim, int batch_size)
 {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -152,22 +172,34 @@ void forward_pass(mlp_t* mlp)
         (const float*)mlp->fc1_w, (const float*)mlp->input, mlp->fc1_w_inter,
         mlp->input_dim, mlp->hidden_dim, mlp->batch_size
     );
-    relu_forward_launch((const float*)mlp->fc1_w_inter, mlp->relu_inter, mlp->hidden_dim, mlp->batch_size);
+    bias_forward_launch(
+        (const float*)mlp->fc1_b, (const float*)mlp->fc1_w_inter, mlp->fc1_b_inter, 
+        mlp->hidden_dim, mlp->batch_size
+    );
+    relu_forward_launch(
+        (const float*)mlp->fc1_w_inter, mlp->relu_inter, mlp->hidden_dim, mlp->batch_size
+    );
+
     printf("fc1_w_inter:\n");
     device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->fc1_w_inter);
+    printf("\n");
+    printf("fc1_b_inter:\n");
+    device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->fc1_b_inter);
     printf("\n");
     printf("relu_inter:\n");
     device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->relu_inter);
     printf("\n");
-    // TODO:
-    // bias
-    // relu
+
     fc_forward_launch<tile_width>(
-        (const float*)mlp->fc2_w, (const float*)mlp->fc1_w_inter, mlp->output,
+        (const float*)mlp->fc2_w, (const float*)mlp->relu_inter, mlp->fc2_w_inter,
         mlp->hidden_dim, mlp->output_dim, mlp->batch_size
     );
+    bias_forward_launch(
+        (const float*)mlp->fc2_b, (const float*)mlp->fc2_w_inter, mlp->fc2_b_inter, 
+        mlp->output_dim, mlp->batch_size
+    );
     printf("output:\n");
-    device_to_host_and_print(mlp->batch_size, mlp->output_dim, mlp->output);
+    device_to_host_and_print(mlp->batch_size, mlp->output_dim, mlp->fc2_b_inter);
     // TODO:
     // softmax
 }
