@@ -16,6 +16,23 @@
     } \
 }
 
+void device_to_host_and_print(int height, int width, float* d_A)
+{
+    size_t mat_size = sizeof(float) * height * width;
+    float* h_A = (float*)malloc(mat_size);
+    cudaMemcpy(h_A, d_A, mat_size, cudaMemcpyDeviceToHost);
+    for(int i = 0; i < height; ++i)
+    {
+        printf("[");
+        for(int k = 0; k < width; ++k)
+        {
+            printf("%f ", h_A[i*width + k]);
+        }
+        printf("]\n");
+    }
+    free(h_A);
+}
+
 struct mlp_t
 {
     int input_dim;
@@ -33,7 +50,9 @@ struct mlp_t
 
 template<int tile_width>
 __global__ void fc_forward_kernel(
-    const float* W, const float* X, float* Y, 
+    const float* W, // Shape: (input_dim, output_dim)
+    const float* X, // Shape: (batch_size, input_dim)
+    float* Y,       // Shape: (batch_size, output_dim)
     int input_dim, int output_dim, int batch_size
 ){
     __shared__ float X_s[tile_width][tile_width];
@@ -48,12 +67,13 @@ __global__ void fc_forward_kernel(
     int col = block_x * tile_width + thread_x;
 
     float Y_val = 0.0f;
-    for(int ph = 0; ph < ceil(output_dim/tile_width); ++ph)
+    for(int ph = 0; ph < ceil(output_dim/(float)tile_width); ++ph)
     {
         // Load W tile into shared memory.
         if(row < output_dim && ph*tile_width + thread_x < input_dim)
         {
-            W_s[thread_y][thread_x] = W[row*input_dim + ph*tile_width + thread_x];
+            // Tiled vertically.
+            W_s[thread_y][thread_x] = W[(ph*tile_width + thread_y)*output_dim + col];
         }
         else
         {
@@ -63,7 +83,8 @@ __global__ void fc_forward_kernel(
         // Load X tile into shared memory.
         if(col < input_dim && ph*tile_width + thread_y < output_dim)
         {
-            X_s[thread_y][thread_x] = X[(ph*tile_width + thread_y)*input_dim + col];
+            // Tiled horizontally. 
+            X_s[thread_y][thread_x] = X[row*input_dim + ph*tile_width + thread_x];
         }
         else
         {
@@ -74,14 +95,14 @@ __global__ void fc_forward_kernel(
         // Inner loop dot product.
         for(int k = 0; k < tile_width; ++k)
         {
-            Y_val += X_s[k][thread_x] * W_s[thread_y][k];
+            Y_val += X_s[thread_y][k] * W_s[k][thread_x];
         }
         __syncthreads();
     }
 
     if(row < output_dim && col < input_dim)
     {
-        Y[row*input_dim + col] = Y_val;
+        Y[row*output_dim + col] = Y_val;
     }
 }
 
@@ -90,11 +111,10 @@ void fc_forward(
     const float* W, const float* X, float* Y,
     int input_dim, int output_dim, int batch_size 
 ){
-    // batch is vertical
-    // hidden dim is horizontal
     const int block_size = 32;
     dim3 grid_dim((output_dim + tile_width - 1) / tile_width, (batch_size + tile_width - 1) / tile_width);
     dim3 block_dim(tile_width, tile_width);
+    //printf("block_dim: (%d, %d)\ngrid_dim: (%d, %d)\n", block_dim.x, block_dim.y, grid_dim.x, grid_dim.y);
     fc_forward_kernel<tile_width><<<grid_dim, block_dim>>>(W, X, Y, input_dim, output_dim, batch_size);
 }
 
@@ -105,6 +125,8 @@ void forward_pass(mlp_t* mlp)
         (const float*)mlp->fc1_w, (const float*)mlp->input, mlp->hidden,
         mlp->input_dim, mlp->hidden_dim, mlp->batch_size
     );
+    printf("Hidden:\n");
+    device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->hidden);
     // TODO:
     // bias
     // relu
@@ -112,6 +134,8 @@ void forward_pass(mlp_t* mlp)
         (const float*)mlp->fc2_w, (const float*)mlp->hidden, mlp->output,
         mlp->hidden_dim, mlp->output_dim, mlp->batch_size
     );
+    printf("Output:\n");
+    device_to_host_and_print(mlp->batch_size, mlp->output_dim, mlp->hidden);
     // TODO:
     // softmax
 }
@@ -134,7 +158,6 @@ void random_normal_init(int height, int width, float* A, unsigned long seed)
     const int n_elements = height * width;
     const int block_dim = 1024;
     const int grid_dim = (n_elements + block_dim - 1) / block_dim;
-    //printf("block_dim: %d\ngrid_dim: %d\n", block_dim, grid_dim);
     random_normal_init_kernel<<<grid_dim, block_dim>>>(A, n_elements, seed);
 }
 
@@ -156,23 +179,6 @@ void zero_init(int height, int width, float* A)
     zero_init_kernel<<<grid_dim, block_dim>>>(A, n_elements);
 }
 
-void device_to_host_and_print(int height, int width, float* d_A)
-{
-    size_t mat_size = sizeof(float) * height * width;
-    float* h_A = (float*)malloc(mat_size);
-    cudaMemcpy(h_A, d_A, mat_size, cudaMemcpyDeviceToHost);
-    for(int i = 0; i < height; ++i)
-    {
-        printf("[");
-        for(int k = 0; k < width; ++k)
-        {
-            printf("%f ", h_A[i*width + k]);
-        }
-        printf("]\n");
-    }
-    free(h_A);
-}
-
 int main()
 {
     load_mnist();
@@ -182,9 +188,14 @@ int main()
     constexpr int input_dim = 784;
     constexpr int hidden_dim = 256;
     constexpr int output_dim = 10;
-    constexpr int batch_size = 32;
+    constexpr int batch_size = 2;
+    constexpr int tile_width = 32;
 
     mlp_t mlp;
+    mlp.input_dim = input_dim;
+    mlp.hidden_dim = hidden_dim;
+    mlp.output_dim = output_dim;
+    mlp.batch_size = batch_size;
     CHECK_CUDA(cudaMalloc(&mlp.fc1_w, sizeof(float) * input_dim * hidden_dim));
     CHECK_CUDA(cudaMalloc(&mlp.fc2_w, sizeof(float) * hidden_dim * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.fc1_b, sizeof(float) * hidden_dim));
@@ -198,12 +209,18 @@ int main()
     random_normal_init(hidden_dim, output_dim, mlp.fc2_w, 0);
     zero_init(1, hidden_dim, mlp.fc1_b);
     zero_init(1, output_dim, mlp.fc2_b);
+    zero_init(batch_size, hidden_dim, mlp.output);
+    zero_init(1, output_dim, mlp.output);
     printf("Initialized weights and biases\n");
-    //device_to_host_and_print(output_dim, hidden_dim, mlp.fc2_w);
+    //printf("Initial output:\n");
+    //device_to_host_and_print(batch_size, output_dim, mlp.output);
 
     cudaMemcpy(
         mlp.input, &train_image[0], 
         sizeof(float) * input_dim * batch_size, cudaMemcpyHostToDevice
     );
-    device_to_host_and_print(batch_size, input_dim, mlp.input);
+    //device_to_host_and_print(batch_size, input_dim, mlp.input);
+    forward_pass<tile_width>(&mlp);
+    //printf("First pass output:\n");
+    //device_to_host_and_print(batch_size, output_dim, mlp.output);
 }
