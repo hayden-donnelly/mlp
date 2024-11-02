@@ -1,6 +1,7 @@
 #include <cuda.h>
 #include <iostream>
 #include <cstdio>
+#include <cfloat>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include "mnist.hpp"
@@ -165,43 +166,100 @@ void relu_forward_launch(const float* X, float* Y, int input_dim, int batch_size
     relu_forward_kernel<<<grid_dim, block_dim>>>(X, Y, input_dim, batch_size);
 }
 
-template<int tile_width> 
+template<int rows_per_block, int input_dim, int batch_size>
+__global__ void softmax_forward_kernel(const float* X, float* Y)
+{
+    constexpr int elements_per_block = rows_per_block * input_dim;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int row_idx = idx / input_dim;
+
+    __shared__ float X_s[elements_per_block];
+    __shared__ float row_max[rows_per_block];
+    __shared__ float row_exp_sum[rows_per_block];
+    
+    if(idx < input_dim * batch_size && threadIdx.x < elements_per_block)
+    {
+        X_s[threadIdx.x] = X[idx];
+    }
+    __syncthreads();
+
+    // Turn off all threads except for the ones mapped to the start of each row.
+    if(idx % input_dim == 0 && row_idx < batch_size)
+    {
+        // Find each row's maxmimum value. 
+        row_max[row_idx] = -FLT_MAX;
+        for(int i = 0; i < input_dim; ++i)
+        {
+            float X_val = X_s[row_idx * input_dim + i];
+            if(row_max[row_idx] < X_val)
+            {
+                row_max[row_idx] = X_val;
+            }
+        }
+        
+        // Calculate the row's sum of exponentials.
+        row_exp_sum[row_idx] = 0.0f;
+        for(int i = 0; i < input_dim; ++i)
+        {
+            row_exp_sum[row_idx] += __expf(X_s[row_idx * input_dim + i] - row_max[row_idx]);
+        }
+    }
+    __syncthreads();
+
+    if(idx < input_dim * batch_size && threadIdx.x < elements_per_block)
+    {
+        Y[idx] = __expf(X_s[threadIdx.x] - row_max[row_idx]) / row_exp_sum[row_idx];
+    }
+}
+
+template<int input_dim, int batch_size>
+void softmax_forward_launch(const float* X, float* Y)
+{
+    constexpr int rows_per_block = (6 > batch_size) ? batch_size: 6;
+    dim3 grid_dim((batch_size + rows_per_block - 1) / rows_per_block);
+    dim3 block_dim(ceil((rows_per_block * input_dim) / (float)32) * 32);
+    //printf("block_dim: (%d, %d)\ngrid_dim: (%d, %d)\n", block_dim.x, block_dim.y, grid_dim.x, grid_dim.y);
+    softmax_forward_kernel<rows_per_block, input_dim, batch_size><<<grid_dim, block_dim>>>(X, Y);
+}
+
+template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
     fc_forward_launch<tile_width>(
         (const float*)mlp->fc1_w, (const float*)mlp->input, mlp->fc1_w_inter,
-        mlp->input_dim, mlp->hidden_dim, mlp->batch_size
+        input_dim, hidden_dim, batch_size
     );
     bias_forward_launch(
         (const float*)mlp->fc1_b, (const float*)mlp->fc1_w_inter, mlp->fc1_b_inter, 
-        mlp->hidden_dim, mlp->batch_size
+        hidden_dim, batch_size
     );
     relu_forward_launch(
-        (const float*)mlp->fc1_w_inter, mlp->relu_inter, mlp->hidden_dim, mlp->batch_size
+        (const float*)mlp->fc1_w_inter, mlp->relu_inter, hidden_dim, batch_size
     );
 
     printf("fc1_w_inter:\n");
-    device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->fc1_w_inter);
+    device_to_host_and_print(batch_size, hidden_dim, mlp->fc1_w_inter);
     printf("\n");
     printf("fc1_b_inter:\n");
-    device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->fc1_b_inter);
+    device_to_host_and_print(batch_size, hidden_dim, mlp->fc1_b_inter);
     printf("\n");
     printf("relu_inter:\n");
-    device_to_host_and_print(mlp->batch_size, mlp->hidden_dim, mlp->relu_inter);
+    device_to_host_and_print(batch_size, hidden_dim, mlp->relu_inter);
     printf("\n");
 
     fc_forward_launch<tile_width>(
         (const float*)mlp->fc2_w, (const float*)mlp->relu_inter, mlp->fc2_w_inter,
-        mlp->hidden_dim, mlp->output_dim, mlp->batch_size
+        hidden_dim, output_dim, batch_size
     );
     bias_forward_launch(
         (const float*)mlp->fc2_b, (const float*)mlp->fc2_w_inter, mlp->fc2_b_inter, 
-        mlp->output_dim, mlp->batch_size
+        output_dim, batch_size
     );
+    softmax_forward_launch<output_dim, batch_size>((const float*)mlp->fc2_b_inter, mlp->output);
+    printf("fc2_b_inter:\n");
+    device_to_host_and_print(batch_size, output_dim, mlp->fc2_b_inter);
     printf("output:\n");
-    device_to_host_and_print(mlp->batch_size, mlp->output_dim, mlp->fc2_b_inter);
-    // TODO:
-    // softmax
+    device_to_host_and_print(batch_size, output_dim, mlp->output);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -288,7 +346,7 @@ int main()
         sizeof(float) * input_dim * batch_size, cudaMemcpyHostToDevice
     );
     //device_to_host_and_print(batch_size, input_dim, mlp.input);
-    forward_pass<tile_width>(&mlp);
+    forward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
     //printf("First pass output:\n");
     //device_to_host_and_print(batch_size, output_dim, mlp.output);
 }
