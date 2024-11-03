@@ -55,6 +55,7 @@ struct mlp_t
     float* probs;
     float* ce_losses;
     int* labels;
+    float* avg_loss;
 };
 
 template<int tile_width>
@@ -240,6 +241,26 @@ void cross_entropy_forward_launch(const float* X, const int* T, float* Y, int n_
     cross_entropy_forward_kernel<<<grid_dim, block_dim>>>(X, T, Y, n_classes, batch_size);
 }
 
+__global__ void average_forward_kernel(const float* X, float* Y, int n_inputs)
+{
+    if(threadIdx.x == 0 && blockIdx.x ==0)
+    {
+        // Sequential sum for simplicity because we're expecting a small number of inputs.
+        float sum = 0.0f;
+        for(int i = 0; i < n_inputs; ++i)
+        {
+            sum += X[i];
+        }
+        *Y = sum / (float)n_inputs;
+    }
+}
+
+void average_forward_launch(const float* X, float* Y, int n_inputs)
+{
+    // We have to launch a whole warp, but we're only using one thread.
+    average_forward_kernel<<<1, 32>>>(X, Y, n_inputs);
+}
+
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
@@ -277,12 +298,15 @@ void forward_pass(mlp_t* mlp)
     cross_entropy_forward_launch(
         (const float*)mlp->probs, (const int*)mlp->labels, mlp->ce_losses, 10, batch_size
     );
+    average_forward_launch((const float*)mlp->ce_losses, mlp->avg_loss, batch_size);
     printf("fc2_b_inter:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->fc2_b_inter);
     printf("probs:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->probs);
     printf("ce_losses:\n");
     device_to_host_and_print(batch_size, 1, mlp->ce_losses);
+    printf("avg_loss:\n");
+    device_to_host_and_print(1, 1, mlp->avg_loss);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -354,6 +378,7 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.probs, sizeof(float) * batch_size * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.ce_losses, sizeof(float) * batch_size));
     CHECK_CUDA(cudaMalloc(&mlp.labels, sizeof(int) * batch_size));
+    CHECK_CUDA(cudaMalloc(&mlp.avg_loss, sizeof(float)));
     
     // Initialize weights and biases.
     random_normal_init(hidden_dim, input_dim, mlp.fc1_w, 0);
