@@ -329,6 +329,39 @@ void cross_entropy_backward_launch(
     cross_entropy_backward_kernel<<<1, block_x>>>(dL_dce, probs, labels, dL_dprobs, n_classes, batch_size);
 }
 
+// Ignoring batch dimension for now...
+// Stage 1 computes the jacobian of probs with respect to the logits.
+__global__ void softmax_backward_stage1_kernel(const float* probs, float* dprobs_dlogits, int n_classes)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = idx / n_classes;
+    int col = idx % n_classes;
+    
+    if(col < n_classes && row < n_classes)
+    {
+        float diag_term = (col == row) ? 1.0f : 0.0f;
+        float val = probs[col] * (diag_term - probs[row]);
+        dprobs_dlogits[row*n_classes + col] = val;
+    }
+}
+
+// Ignoring batch dimension for now...
+// Stage 2 multiplies the chained cross entropy jacobian with the softmax jacobian.
+__global__ void softmax_backward_stage2_kernel(
+    const float* dL_dprobs, const float* dprobs_dlogits, float* dL_dlogits, int n_classes
+){
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if(idx < n_classes)
+    {
+        float val = 0.0f;
+        for(int k = 0; k < n_classes; ++k)
+        {
+            val += dL_dprobs[k] * dprobs_dlogits[idx*n_classes + k];
+        }
+        dL_dlogits[idx] = val;
+    }
+}
+
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
