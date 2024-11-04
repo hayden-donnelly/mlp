@@ -56,6 +56,9 @@ struct mlp_t
     float* ce_losses;
     int* labels;
     float* avg_loss;
+
+    float* dL_dce;
+    float* dL_dprobs;
 };
 
 template<int tile_width>
@@ -261,6 +264,24 @@ void average_forward_launch(const float* X, float* Y, int n_inputs)
     average_forward_kernel<<<1, 32>>>(X, Y, n_inputs);
 }
 
+__global__ void average_backward_kernel(float* dL_dX, int n_inputs)
+{
+    if(threadIdx.x == 0 && blockIdx.x == 0)
+    {
+        float partial_deriv = 1.0f / (float)n_inputs;
+        for(int i = 0; i < n_inputs; ++i)
+        {
+            dL_dX[i] = partial_deriv;
+        }
+    }
+}
+
+void average_backward_launch(float* dL_dX, int n_inputs)
+{
+    // We have to launch a whole warp, but we're only using one thread.
+    average_backward_kernel<<<1, 32>>>(dL_dX, n_inputs);
+}
+
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
@@ -276,7 +297,7 @@ void forward_pass(mlp_t* mlp)
         (const float*)mlp->fc1_w_inter, mlp->relu_inter, hidden_dim, batch_size
     );
 
-    printf("fc1_w_inter:\n");
+    /*printf("fc1_w_inter:\n");
     device_to_host_and_print(batch_size, hidden_dim, mlp->fc1_w_inter);
     printf("\n");
     printf("fc1_b_inter:\n");
@@ -284,7 +305,7 @@ void forward_pass(mlp_t* mlp)
     printf("\n");
     printf("relu_inter:\n");
     device_to_host_and_print(batch_size, hidden_dim, mlp->relu_inter);
-    printf("\n");
+    printf("\n");*/
 
     fc_forward_launch<tile_width>(
         (const float*)mlp->fc2_w, (const float*)mlp->relu_inter, mlp->fc2_w_inter,
@@ -299,6 +320,7 @@ void forward_pass(mlp_t* mlp)
         (const float*)mlp->probs, (const int*)mlp->labels, mlp->ce_losses, 10, batch_size
     );
     average_forward_launch((const float*)mlp->ce_losses, mlp->avg_loss, batch_size);
+    
     printf("fc2_b_inter:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->fc2_b_inter);
     printf("probs:\n");
@@ -307,6 +329,10 @@ void forward_pass(mlp_t* mlp)
     device_to_host_and_print(batch_size, 1, mlp->ce_losses);
     printf("avg_loss:\n");
     device_to_host_and_print(1, 1, mlp->avg_loss);
+
+    average_backward_launch(mlp->dL_dce, batch_size);
+    printf("dL_dce:\n");
+    device_to_host_and_print(batch_size, 1, mlp->dL_dce);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -379,7 +405,9 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.ce_losses, sizeof(float) * batch_size));
     CHECK_CUDA(cudaMalloc(&mlp.labels, sizeof(int) * batch_size));
     CHECK_CUDA(cudaMalloc(&mlp.avg_loss, sizeof(float)));
-    
+    CHECK_CUDA(cudaMalloc(&mlp.dL_dce, sizeof(float) * batch_size));
+    CHECK_CUDA(cudaMalloc(&mlp.dL_dprobs, sizeof(float) * batch_size * output_dim));
+
     // Initialize weights and biases.
     random_normal_init(hidden_dim, input_dim, mlp.fc1_w, 0);
     random_normal_init(hidden_dim, output_dim, mlp.fc2_w, 0);
