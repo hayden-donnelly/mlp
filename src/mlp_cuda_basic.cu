@@ -429,8 +429,12 @@ void forward_pass(mlp_t* mlp)
     printf("ce_losses:\n");
     device_to_host_and_print(batch_size, 1, mlp->ce_losses);
     printf("avg_loss:\n");
-    device_to_host_and_print(1, 1, mlp->avg_loss);
-    
+    device_to_host_and_print(1, 1, mlp->avg_loss); 
+}
+
+template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size>
+void backward_pass(mlp_t* mlp)
+{
     average_backward_launch(mlp->dL_dce, batch_size);
     cross_entropy_backward_launch(
         (const float*)mlp->dL_dce, (const float*)mlp->probs, (const int64_t*)mlp->labels, 
@@ -547,6 +551,7 @@ int main()
     );
     
     forward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
+    backward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
     cudaFree(mlp.fc1_w);
     cudaFree(mlp.fc1_b);
     cudaFree(mlp.fc2_w);
