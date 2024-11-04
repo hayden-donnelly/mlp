@@ -2,6 +2,7 @@
 #include <iostream>
 #include <cstdio>
 #include <cfloat>
+#include <cmath>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include "mnist.hpp"
@@ -34,13 +35,25 @@ void device_to_host_and_print(int height, int width, float* d_A)
     free(h_A);
 }
 
-struct mlp_t
+void device_to_host_and_print_int(int height, int width, int64_t* d_A)
 {
-    int input_dim;
-    int hidden_dim;
-    int output_dim;
-    int batch_size;
-    
+    size_t mat_size = sizeof(int64_t) * height * width;
+    int64_t* h_A = (int64_t*)malloc(mat_size);
+    cudaMemcpy(h_A, d_A, mat_size, cudaMemcpyDeviceToHost);
+    for(int i = 0; i < height; ++i)
+    {
+        printf("[");
+        for(int k = 0; k < width; ++k)
+        {
+            printf("%ld ", h_A[i*width + k]);
+        }
+        printf("]\n");
+    }
+    free(h_A);
+}
+
+struct  mlp_t
+{
     float* fc1_w;
     float* fc1_b;
     float* fc2_w;
@@ -54,13 +67,15 @@ struct mlp_t
     float* fc2_b_inter;
     float* probs;
     float* ce_losses;
-    int* labels;
     float* avg_loss;
 
     float* dL_dce;
     float* dL_dprobs;
+
+    int64_t* labels;
 };
 
+// TODO: I think there are incorrect memory indices in this kernel and need to double check them.
 template<int tile_width>
 __global__ void fc_forward_kernel(
     const float* W, // Shape: (input_dim, output_dim)
@@ -113,7 +128,7 @@ __global__ void fc_forward_kernel(
         __syncthreads();
     }
 
-    if(row < output_dim && col < input_dim)
+    if(row < batch_size && col < output_dim)
     {
         Y[row*output_dim + col] = Y_val;
     }
@@ -227,7 +242,7 @@ void softmax_forward_launch(const float* X, float* Y)
 }
 
 __global__ void cross_entropy_forward_kernel(
-    const float* X, const int* T, float* Y, int n_classes, int batch_size
+    const float* X, const int64_t* T, float* Y, int n_classes, int batch_size
 ){
     constexpr float eps = 0.00001f;
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -237,7 +252,7 @@ __global__ void cross_entropy_forward_kernel(
     }
 }
 
-void cross_entropy_forward_launch(const float* X, const int* T, float* Y, int n_classes, int batch_size)
+void cross_entropy_forward_launch(const float* X, const int64_t* T, float* Y, int n_classes, int batch_size)
 {
     dim3 grid_dim(1);
     dim3 block_dim(ceil(batch_size / (float)32) * 32);
@@ -282,13 +297,50 @@ void average_backward_launch(float* dL_dX, int n_inputs)
     average_backward_kernel<<<1, 32>>>(dL_dX, n_inputs);
 }
 
+// NOTE: not using dL_dce right now since it seems like a pretty simple kernel fusion.
+// Maybe remove the average_backward_kernel.
+__global__ void cross_entropy_backward_kernel(
+    const float* dL_dce, const float* probs, const int64_t* labels, 
+    float* dL_dprobs, int n_classes, int batch_size
+){
+    constexpr float eps = 0.000001f;
+    constexpr float max_grad = 30.0f;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if(idx < n_classes * batch_size)
+    {
+        int label = labels[idx / n_classes];
+        float val = 0.0f;
+        if(idx % n_classes == label)
+        {
+            float prob = fmaxf(probs[idx], eps);
+            val = -1.0f / ((float)batch_size * prob);
+            val = fmaxf(fminf(val, max_grad), -max_grad);
+        }
+        dL_dprobs[idx] = val;
+    }
+}
+
+void cross_entropy_backward_launch(
+    const float* dL_dce, const float* probs, const int64_t* labels, 
+    float* dL_dprobs, int n_classes, int batch_size
+){
+    const int block_x = ceil((n_classes * batch_size) / (float)32) * 32;
+    //printf("block x %d\n", block_x);
+    cross_entropy_backward_kernel<<<1, block_x>>>(dL_dce, probs, labels, dL_dprobs, n_classes, batch_size);
+}
+
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
+    printf("labels:\n");
+    device_to_host_and_print_int(batch_size, 1, mlp->labels);
     fc_forward_launch<tile_width>(
         (const float*)mlp->fc1_w, (const float*)mlp->input, mlp->fc1_w_inter,
         input_dim, hidden_dim, batch_size
     );
+    printf("labels:\n");
+    device_to_host_and_print_int(batch_size, 1, mlp->labels);
+
     bias_forward_launch(
         (const float*)mlp->fc1_b, (const float*)mlp->fc1_w_inter, mlp->fc1_b_inter, 
         hidden_dim, batch_size
@@ -317,7 +369,7 @@ void forward_pass(mlp_t* mlp)
     );
     softmax_forward_launch<output_dim, batch_size>((const float*)mlp->fc2_b_inter, mlp->probs);
     cross_entropy_forward_launch(
-        (const float*)mlp->probs, (const int*)mlp->labels, mlp->ce_losses, 10, batch_size
+        (const float*)mlp->probs, (const int64_t*)mlp->labels, mlp->ce_losses, 10, batch_size
     );
     average_forward_launch((const float*)mlp->ce_losses, mlp->avg_loss, batch_size);
     
@@ -329,10 +381,17 @@ void forward_pass(mlp_t* mlp)
     device_to_host_and_print(batch_size, 1, mlp->ce_losses);
     printf("avg_loss:\n");
     device_to_host_and_print(1, 1, mlp->avg_loss);
-
+    
     average_backward_launch(mlp->dL_dce, batch_size);
+    cross_entropy_backward_launch(
+        (const float*)mlp->dL_dce, (const float*)mlp->probs, (const int64_t*)mlp->labels, 
+        mlp->dL_dprobs, 10, batch_size
+    );
+
     printf("dL_dce:\n");
     device_to_host_and_print(batch_size, 1, mlp->dL_dce);
+    printf("dL_dprobs:\n");
+    device_to_host_and_print(batch_size, 10, mlp->dL_dprobs);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -387,10 +446,6 @@ int main()
     constexpr int tile_width = 32;
 
     mlp_t mlp;
-    mlp.input_dim = input_dim;
-    mlp.hidden_dim = hidden_dim;
-    mlp.output_dim = output_dim;
-    mlp.batch_size = batch_size;
     CHECK_CUDA(cudaMalloc(&mlp.fc1_w, sizeof(float) * input_dim * hidden_dim));
     CHECK_CUDA(cudaMalloc(&mlp.fc2_w, sizeof(float) * hidden_dim * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.fc1_b, sizeof(float) * hidden_dim));
@@ -403,7 +458,7 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.fc2_b_inter, sizeof(float) * batch_size * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.probs, sizeof(float) * batch_size * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.ce_losses, sizeof(float) * batch_size));
-    CHECK_CUDA(cudaMalloc(&mlp.labels, sizeof(int) * batch_size));
+    CHECK_CUDA(cudaMalloc(&mlp.labels, sizeof(int64_t) * batch_size));
     CHECK_CUDA(cudaMalloc(&mlp.avg_loss, sizeof(float)));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dce, sizeof(float) * batch_size));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dprobs, sizeof(float) * batch_size * output_dim));
@@ -416,14 +471,39 @@ int main()
     zero_init(1, output_dim, mlp.probs);
     printf("Initialized weights and biases\n");
 
+
     int batch_start_idx = 0;
+    // Cast batch labels to int64_t.
+    int64_t batch_labels[batch_size];
+    for(int i = 0; i < batch_size; ++i)
+    {
+        batch_labels[i] = (int64_t)train_label[batch_start_idx + i];
+        printf("%d\n", batch_labels[i]);
+    }
     cudaMemcpy(
         mlp.input, &train_image[batch_start_idx], 
         sizeof(float) * input_dim * batch_size, cudaMemcpyHostToDevice
     );
     cudaMemcpy(
-        mlp.labels, &train_label[batch_start_idx], 
-        sizeof(int) * batch_size, cudaMemcpyHostToDevice
+        mlp.labels, batch_labels, 
+        sizeof(int64_t) * batch_size, cudaMemcpyHostToDevice
     );
+    
     forward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
+    cudaFree(mlp.fc1_w);
+    cudaFree(mlp.fc1_b);
+    cudaFree(mlp.fc2_w);
+    cudaFree(mlp.fc2_b);
+    cudaFree(mlp.input);
+    cudaFree(mlp.fc1_w_inter);
+    cudaFree(mlp.fc1_b_inter);
+    cudaFree(mlp.relu_inter);
+    cudaFree(mlp.fc2_w_inter);
+    cudaFree(mlp.fc2_b_inter);
+    cudaFree(mlp.probs);
+    cudaFree(mlp.ce_losses);
+    cudaFree(mlp.avg_loss);
+    cudaFree(mlp.dL_dce);
+    cudaFree(mlp.dL_dprobs);
+    cudaFree(mlp.labels);
 }
