@@ -35,12 +35,14 @@
                     cudaPackages.cuda_cudart
                     cudaPackages.cudnn
                     cudaPackages.libcublas
+                    cudaPackages.cuda_sanitizer_api
                     gcc12
                 ];
                 shellHook = ''
                     export CUDA_PATH=${pkgs.cudaPackages.cudatoolkit}
                     source <(sed -Ee '/\$@/d' ${lib.getExe pkgs.nixgl.nixGLIntel})
                     source <(sed -Ee '/\$@/d' ${lib.getExe pkgs.nixgl.auto.nixGLNvidia}*)
+                    alias compute-sanitizer="${pkgs.cudaPackages.cuda_sanitizer_api.out}/compute-sanitizer/compute-sanitizer"
                 '';
             };
         }
