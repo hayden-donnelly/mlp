@@ -71,6 +71,8 @@ struct  mlp_t
 
     float* dL_dce;
     float* dL_dprobs;
+    float* dprobs_dlogits;
+    float* dL_dlogits;
 
     int64_t* labels;
 };
@@ -362,6 +364,20 @@ __global__ void softmax_backward_stage2_kernel(
     }
 }
 
+// Launch stage 1 and stage 2 softmax backward kernels.
+void softmax_backward_launch(
+    const float* probs, const float* dL_dprobs, float* dprobs_dlogits, float* dL_dlogits, int n_classes
+){
+    const int block_x_stage1 = ceil((n_classes * n_classes) / (float)32) * 32;
+    const int block_x_stage2 = ceil(n_classes / (float)32) * 32;
+    printf("block_x_stage1 %d\n", block_x_stage1);
+    printf("block_x_stage2 %d\n", block_x_stage2);
+    softmax_backward_stage1_kernel<<<1, block_x_stage1>>>(probs, dprobs_dlogits, n_classes);
+    softmax_backward_stage2_kernel<<<1, block_x_stage2>>>(
+        dL_dprobs, (const float*)dprobs_dlogits, dL_dlogits, n_classes
+    );
+}
+
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
@@ -418,13 +434,19 @@ void forward_pass(mlp_t* mlp)
     average_backward_launch(mlp->dL_dce, batch_size);
     cross_entropy_backward_launch(
         (const float*)mlp->dL_dce, (const float*)mlp->probs, (const int64_t*)mlp->labels, 
-        mlp->dL_dprobs, 10, batch_size
+        mlp->dL_dprobs, output_dim, batch_size
+    );
+    softmax_backward_launch(
+        (const float*)mlp->probs, (const float*)mlp->dL_dprobs, 
+        mlp->dprobs_dlogits, mlp->dL_dlogits, output_dim
     );
 
     printf("dL_dce:\n");
     device_to_host_and_print(batch_size, 1, mlp->dL_dce);
     printf("dL_dprobs:\n");
-    device_to_host_and_print(batch_size, 10, mlp->dL_dprobs);
+    device_to_host_and_print(batch_size, output_dim, mlp->dL_dprobs);
+    printf("dprobs_dlogits:\n");
+    device_to_host_and_print(output_dim, output_dim, mlp->dprobs_dlogits);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -495,6 +517,8 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.avg_loss, sizeof(float)));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dce, sizeof(float) * batch_size));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dprobs, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.dprobs_dlogits, sizeof(float) * batch_size * output_dim * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.dL_dlogits, sizeof(float) * batch_size * output_dim));
 
     // Initialize weights and biases.
     random_normal_init(hidden_dim, input_dim, mlp.fc1_w, 0);
@@ -538,5 +562,6 @@ int main()
     cudaFree(mlp.avg_loss);
     cudaFree(mlp.dL_dce);
     cudaFree(mlp.dL_dprobs);
-    cudaFree(mlp.labels);
+    cudaFree(mlp.dprobs_dlogits);
+    cudaFree(mlp.dL_dlogits);
 }
