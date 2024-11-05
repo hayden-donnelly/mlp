@@ -71,7 +71,6 @@ struct  mlp_t
 
     float* dL_dce;
     float* dL_dprobs;
-    float* dprobs_dlogits;
     float* dL_dlogits;
 
     int64_t* labels;
@@ -331,51 +330,23 @@ void cross_entropy_backward_launch(
     cross_entropy_backward_kernel<<<1, block_x>>>(dL_dce, probs, labels, dL_dprobs, n_classes, batch_size);
 }
 
-// Ignoring batch dimension for now...
-// Stage 1 computes the jacobian of probs with respect to the logits.
-__global__ void softmax_backward_stage1_kernel(const float* probs, float* dprobs_dlogits, int n_classes)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int row = idx / n_classes;
-    int col = idx % n_classes;
-    
-    if(col < n_classes && row < n_classes)
-    {
-        float diag_term = (col == row) ? 1.0f : 0.0f;
-        float val = probs[col] * (diag_term - probs[row]);
-        dprobs_dlogits[row*n_classes + col] = val;
-    }
-}
-
-// Ignoring batch dimension for now...
-// Stage 2 multiplies the chained cross entropy jacobian with the softmax jacobian.
-__global__ void softmax_backward_stage2_kernel(
-    const float* dL_dprobs, const float* dprobs_dlogits, float* dL_dlogits, int n_classes
+__global__ void softmax_backward_kernel(
+    const float* probs, const int64_t* labels, float* dL_dlogits, int n_classes, int batch_size
 ){
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if(idx < n_classes)
+    if(idx < n_classes * batch_size)
     {
-        float val = 0.0f;
-        for(int k = 0; k < n_classes; ++k)
-        {
-            val += dL_dprobs[k] * dprobs_dlogits[idx*n_classes + k];
-        }
-        dL_dlogits[idx] = val;
+        float label_term = (labels[idx / n_classes] == idx % n_classes) ? 1.0f : 0.0f;
+        dL_dlogits[idx] = probs[idx] - label_term;
     }
 }
 
-// Launch stage 1 and stage 2 softmax backward kernels.
 void softmax_backward_launch(
-    const float* probs, const float* dL_dprobs, float* dprobs_dlogits, float* dL_dlogits, int n_classes
+    const float* probs, const int64_t* labels, float* dL_dlogits, int n_classes, int batch_size
 ){
-    const int block_x_stage1 = ceil((n_classes * n_classes) / (float)32) * 32;
-    const int block_x_stage2 = ceil(n_classes / (float)32) * 32;
-    printf("block_x_stage1 %d\n", block_x_stage1);
-    printf("block_x_stage2 %d\n", block_x_stage2);
-    softmax_backward_stage1_kernel<<<1, block_x_stage1>>>(probs, dprobs_dlogits, n_classes);
-    softmax_backward_stage2_kernel<<<1, block_x_stage2>>>(
-        dL_dprobs, (const float*)dprobs_dlogits, dL_dlogits, n_classes
-    );
+    const int block_x = ceil((n_classes * batch_size) / (float)32) * 32;
+    printf("softamx back block_x %d\n", block_x);
+    softmax_backward_kernel<<<1, block_x>>>(probs, labels, dL_dlogits, n_classes, batch_size);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
@@ -441,16 +412,15 @@ void backward_pass(mlp_t* mlp)
         mlp->dL_dprobs, output_dim, batch_size
     );
     softmax_backward_launch(
-        (const float*)mlp->probs, (const float*)mlp->dL_dprobs, 
-        mlp->dprobs_dlogits, mlp->dL_dlogits, output_dim
+        (const float*)mlp->probs, (const int64_t*)mlp->labels, mlp->dL_dlogits, output_dim, batch_size
     );
 
     printf("dL_dce:\n");
     device_to_host_and_print(batch_size, 1, mlp->dL_dce);
     printf("dL_dprobs:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->dL_dprobs);
-    printf("dprobs_dlogits:\n");
-    device_to_host_and_print(output_dim, output_dim, mlp->dprobs_dlogits);
+    printf("dL_dlogits:\n");
+    device_to_host_and_print(batch_size, output_dim, mlp->dL_dlogits);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -521,7 +491,6 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.avg_loss, sizeof(float)));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dce, sizeof(float) * batch_size));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dprobs, sizeof(float) * batch_size * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.dprobs_dlogits, sizeof(float) * batch_size * output_dim * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dlogits, sizeof(float) * batch_size * output_dim));
 
     // Initialize weights and biases.
@@ -567,6 +536,5 @@ int main()
     cudaFree(mlp.avg_loss);
     cudaFree(mlp.dL_dce);
     cudaFree(mlp.dL_dprobs);
-    cudaFree(mlp.dprobs_dlogits);
     cudaFree(mlp.dL_dlogits);
 }
