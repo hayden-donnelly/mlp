@@ -72,7 +72,8 @@ struct  mlp_t
     float* dL_dce;
     float* dL_dprobs;
     float* dL_dlogits;
-    float* dL_dfc2_bias;
+    float* dL_dfc2_b;
+    float* dL_dfc2_w;
 
     int64_t* labels;
 };
@@ -346,7 +347,6 @@ void softmax_backward_launch(
     const float* probs, const int64_t* labels, float* dL_dlogits, int n_classes, int batch_size
 ){
     const int block_x = ceil((n_classes * batch_size) / (float)32) * 32;
-    printf("softamx back block_x %d\n", block_x);
     softmax_backward_kernel<<<1, block_x>>>(probs, labels, dL_dlogits, n_classes, batch_size);
 }
 
@@ -364,6 +364,41 @@ void bias_out_backward_launch(const float* dL_dlogits, float* dL_dbias, int n_cl
 {
     const int block_x = ceil((n_classes * batch_size) / (float)32) * 32;
     bias_out_backward_kernel<<<1, block_x>>>(dL_dlogits, dL_dbias, n_classes, batch_size);
+}
+
+__global__ void fc_backward_kernel(
+    const float* dL_dY, const float* X, float* dL_dW, int input_dim, int output_dim, int batch_size
+){
+    int batch = blockIdx.y * blockDim.y + threadIdx.y;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = idx / input_dim;
+    int col = idx % input_dim;
+
+    if(batch < batch_size && col < input_dim && row < output_dim)
+    {
+        dL_dW[batch*input_dim*output_dim + row*input_dim + col] = 
+            dL_dY[batch*output_dim + row] * X[batch*input_dim + col];
+    }
+}
+
+void fc_backward_launch(
+    const float* dL_dY, const float* X, float* dL_dW, 
+    int input_dim, int output_dim, int batch_size
+){
+    const int threads_per_sample = ceil((input_dim * output_dim) / (float)32) * 32;
+    const int n_blocks = ceil(threads_per_sample / (float)1024);
+    dim3 block_dim(ceil(threads_per_sample / (float)n_blocks), 1, 1);
+    dim3 grid_dim(n_blocks, batch_size);
+    fc_backward_kernel<<<grid_dim, block_dim>>>(dL_dY, X, dL_dW, input_dim, output_dim, batch_size);
+
+    printf("input_dim %d\n", input_dim);
+    printf("output_dim %d\n", output_dim);
+    printf("threads_per_sample %d\n", threads_per_sample);
+    printf("n_blocks %d\n", n_blocks);
+    printf("block_dim.x %d\n", block_dim.x);
+    printf("block_dim.y %d\n", block_dim.y);
+    printf("grid_dim.x %d\n", grid_dim.x);
+    printf("grid_dim.y %d\n", grid_dim.y);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
@@ -432,7 +467,11 @@ void backward_pass(mlp_t* mlp)
         (const float*)mlp->probs, (const int64_t*)mlp->labels, mlp->dL_dlogits, output_dim, batch_size
     );
     bias_out_backward_launch(
-        (const float*)mlp->dL_dlogits, mlp->dL_dfc2_bias, output_dim, batch_size
+        (const float*)mlp->dL_dlogits, mlp->dL_dfc2_b, output_dim, batch_size
+    );
+    fc_backward_launch(
+        (const float*)mlp->dL_dlogits, (const float*)mlp->relu_inter, mlp->dL_dfc2_w, 
+        hidden_dim, output_dim, batch_size
     );
 
     printf("dL_dce:\n");
@@ -441,8 +480,10 @@ void backward_pass(mlp_t* mlp)
     device_to_host_and_print(batch_size, output_dim, mlp->dL_dprobs);
     printf("dL_dlogits:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->dL_dlogits);
-    printf("dL_dfc2_bias:\n");
-    device_to_host_and_print(batch_size, output_dim, mlp->dL_dfc2_bias);
+    printf("dL_dfc2_b:\n");
+    device_to_host_and_print(batch_size, output_dim, mlp->dL_dfc2_b);
+    //printf("dL_dfc2_w:\n");
+    //device_to_host_and_print(output_dim, hidden_dim, mlp->dL_dfc2_w);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -514,7 +555,8 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.dL_dce, sizeof(float) * batch_size));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dprobs, sizeof(float) * batch_size * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dlogits, sizeof(float) * batch_size * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc2_bias, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc2_b, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc2_w, sizeof(float) * batch_size * input_dim * output_dim));
 
     // Initialize weights and biases.
     random_normal_init(hidden_dim, input_dim, mlp.fc1_w, 0);
@@ -560,4 +602,6 @@ int main()
     cudaFree(mlp.dL_dce);
     cudaFree(mlp.dL_dprobs);
     cudaFree(mlp.dL_dlogits);
+    cudaFree(mlp.dL_dfc2_b);
+    cudaFree(mlp.dL_dfc2_w);
 }
