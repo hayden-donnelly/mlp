@@ -75,6 +75,7 @@ struct  mlp_t
     float* dL_dfc2_b;
     float* dL_dfc2_w;
     float* dL_drelu_inter;
+    float* dL_dfc1_b_inter;
 
     int64_t* labels;
 };
@@ -434,6 +435,28 @@ void fc_backward_x_launch(
     printf("grid_dim.y %d\n", grid_dim.y);
 }
 
+__global__ void relu_backward_kernel(
+    const float* dL_dY, const float* X, float* dL_dX, int input_dim, int batch_size
+){
+    int batch = blockIdx.y * blockDim.y + threadIdx.y;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if(batch < batch_size && idx < input_dim)
+    {
+        float X_val = X[batch*input_dim + idx];
+        float dL_dY_val = dL_dY[batch*input_dim + idx];
+        dL_dX[batch*input_dim + idx] = ((X_val > 0.0f) ? 1.0f : 0.0f) * dL_dY_val;
+    }
+}
+
+void relu_backward_launch(
+    const float* dL_dY, const float* X, float* dL_dX, int input_dim, int batch_size
+){
+    const int block_x = ceil(input_dim / (float)32) * 32;
+    dim3 grid_dim(1, batch_size);
+    dim3 block_dim(block_x, 1);
+    relu_backward_kernel<<<grid_dim, block_dim>>>(dL_dY, X, dL_dX, input_dim, batch_size);
+}
+
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
@@ -510,6 +533,10 @@ void backward_pass(mlp_t* mlp)
         (const float*)mlp->dL_dlogits, (const float*)mlp->fc2_w, mlp->dL_drelu_inter, 
         hidden_dim, output_dim, batch_size
     );
+    relu_backward_launch(
+        (const float*)mlp->dL_drelu_inter, (const float*)mlp->fc1_b_inter, 
+        mlp->dL_dfc1_b_inter, input_dim, batch_size
+    );
 
     printf("dL_dce:\n");
     device_to_host_and_print(batch_size, 1, mlp->dL_dce);
@@ -521,8 +548,10 @@ void backward_pass(mlp_t* mlp)
     device_to_host_and_print(batch_size, output_dim, mlp->dL_dfc2_b);
     //printf("dL_dfc2_w:\n");
     //device_to_host_and_print(output_dim, hidden_dim, mlp->dL_dfc2_w);
-    printf("dL_drelu_inter:\n");
-    device_to_host_and_print(batch_size, hidden_dim, mlp->dL_drelu_inter);
+    //printf("dL_drelu_inter:\n");
+    //device_to_host_and_print(batch_size, hidden_dim, mlp->dL_drelu_inter);
+    printf("dL_dfc1_b_inter:\n");
+    device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b_inter);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -597,7 +626,8 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.dL_dfc2_b, sizeof(float) * batch_size * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dfc2_w, sizeof(float) * batch_size * hidden_dim * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.dL_drelu_inter, sizeof(float) * batch_size * hidden_dim * output_dim));
-    
+    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc1_b_inter, sizeof(float) * batch_size * hidden_dim));
+
     // Initialize weights and biases.
     random_normal_init(hidden_dim, input_dim, mlp.fc1_w, 0);
     random_normal_init(hidden_dim, output_dim, mlp.fc2_w, 0);
@@ -645,4 +675,5 @@ int main()
     cudaFree(mlp.dL_dfc2_b);
     cudaFree(mlp.dL_dfc2_w);
     cudaFree(mlp.dL_drelu_inter);
+    cudaFree(mlp.dL_dfc1_b_inter);
 }
