@@ -185,8 +185,8 @@ __global__ void relu_forward_kernel(const float* X, float* Y, int input_dim, int
 
 void relu_forward_launch(const float* X, float* Y, int input_dim, int batch_size)
 {
-    const int block_x = (input_dim + 31) / 32;
-    dim3 grid_dim((input_dim + block_x - 1) / block_x, batch_size);
+    const int block_x = ceil(input_dim / (float)32) * 32;
+    dim3 grid_dim(1, batch_size);
     dim3 block_dim(block_x, 1);
     relu_forward_kernel<<<grid_dim, block_dim>>>(X, Y, input_dim, batch_size);
 }
