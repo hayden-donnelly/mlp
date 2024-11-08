@@ -52,7 +52,7 @@ void device_to_host_and_print_int(int height, int width, int64_t* d_A)
     free(h_A);
 }
 
-struct  mlp_t
+struct mlp_t
 {
     float* fc1_w;
     float* fc1_b;
@@ -76,6 +76,8 @@ struct  mlp_t
     float* dL_dfc2_w;
     float* dL_drelu_inter;
     float* dL_dfc1_b_inter;
+    float* dL_dfc1_b;
+    float* dL_dfc1_w;
 
     int64_t* labels;
 };
@@ -352,7 +354,7 @@ void softmax_backward_launch(
     softmax_backward_kernel<<<1, block_x>>>(probs, labels, dL_dlogits, n_classes, batch_size);
 }
 
-__global__ void bias_out_backward_kernel(
+__global__ void bias_backward_kernel(
     const float* dL_dlogits, float* dL_dbias, int n_classes, int batch_size
 ){
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -362,10 +364,10 @@ __global__ void bias_out_backward_kernel(
     }
 }
 
-void bias_out_backward_launch(const float* dL_dlogits, float* dL_dbias, int n_classes, int batch_size)
+void bias_backward_launch(const float* dL_dlogits, float* dL_dbias, int n_classes, int batch_size)
 {
     const int block_x = ceil((n_classes * batch_size) / (float)32) * 32;
-    bias_out_backward_kernel<<<1, block_x>>>(dL_dlogits, dL_dbias, n_classes, batch_size);
+    bias_backward_kernel<<<1, block_x>>>(dL_dlogits, dL_dbias, n_classes, batch_size);
 }
 
 __global__ void fc_backward_w_kernel(
@@ -460,15 +462,10 @@ void relu_backward_launch(
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
-    printf("labels:\n");
-    device_to_host_and_print_int(batch_size, 1, mlp->labels);
     fc_forward_launch<tile_width>(
         (const float*)mlp->fc1_w, (const float*)mlp->input, mlp->fc1_w_inter,
         input_dim, hidden_dim, batch_size
     );
-    printf("labels:\n");
-    device_to_host_and_print_int(batch_size, 1, mlp->labels);
-
     bias_forward_launch(
         (const float*)mlp->fc1_b, (const float*)mlp->fc1_w_inter, mlp->fc1_b_inter, 
         hidden_dim, batch_size
@@ -522,7 +519,7 @@ void backward_pass(mlp_t* mlp)
     softmax_backward_launch(
         (const float*)mlp->probs, (const int64_t*)mlp->labels, mlp->dL_dlogits, output_dim, batch_size
     );
-    bias_out_backward_launch(
+    bias_backward_launch(
         (const float*)mlp->dL_dlogits, mlp->dL_dfc2_b, output_dim, batch_size
     );
     fc_backward_w_launch(
@@ -535,7 +532,14 @@ void backward_pass(mlp_t* mlp)
     );
     relu_backward_launch(
         (const float*)mlp->dL_drelu_inter, (const float*)mlp->fc1_b_inter, 
-        mlp->dL_dfc1_b_inter, input_dim, batch_size
+        mlp->dL_dfc1_b_inter, hidden_dim, batch_size
+    );
+    bias_backward_launch(
+        (const float*)mlp->dL_dfc1_b_inter, mlp->dL_dfc1_b, hidden_dim, batch_size
+    );
+    fc_backward_w_launch(
+        (const float*)mlp->dL_dfc1_b, (const float*)mlp->input, 
+        mlp->dL_dfc1_w, input_dim, hidden_dim, batch_size
     );
 
     printf("dL_dce:\n");
@@ -552,6 +556,10 @@ void backward_pass(mlp_t* mlp)
     //device_to_host_and_print(batch_size, hidden_dim, mlp->dL_drelu_inter);
     printf("dL_dfc1_b_inter:\n");
     device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b_inter);
+    printf("dL_dfc1_b:\n");
+    device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b);
+    //printf("dL_dfc1_w:\n");
+    //device_to_host_and_print(hidden_dim, input_dim, mlp->dL_dfc1_w);
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -627,6 +635,8 @@ int main()
     CHECK_CUDA(cudaMalloc(&mlp.dL_dfc2_w, sizeof(float) * batch_size * hidden_dim * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.dL_drelu_inter, sizeof(float) * batch_size * hidden_dim * output_dim));
     CHECK_CUDA(cudaMalloc(&mlp.dL_dfc1_b_inter, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc1_b, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc1_w, sizeof(float) * batch_size * hidden_dim * input_dim));
 
     // Initialize weights and biases.
     random_normal_init(hidden_dim, input_dim, mlp.fc1_w, 0);
@@ -676,4 +686,6 @@ int main()
     cudaFree(mlp.dL_dfc2_w);
     cudaFree(mlp.dL_drelu_inter);
     cudaFree(mlp.dL_dfc1_b_inter);
+    cudaFree(mlp.dL_dfc1_b);
+    cudaFree(mlp.dL_dfc1_w);
 }
