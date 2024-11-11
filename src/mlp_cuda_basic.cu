@@ -313,6 +313,18 @@ void bias_forward_test(int input_dim, int batch_size, int test_id)
     free(h_Y_ref);
 }
 
+void relu_forward_cpu_ref(const float* X, float* Y, int input_dim, int batch_size)
+{
+    for(int row = 0; row < batch_size; ++row)
+    {
+        for(int col = 0; col < input_dim; ++col)
+        {
+            float X_val = X[row*input_dim + col];
+            Y[row*input_dim + col] = (X_val > 0.0f) ? X_val : 0.0f;
+        }
+    }
+}
+
 __global__ void relu_forward_kernel(const float* X, float* Y, int input_dim, int batch_size)
 {
     int row = blockIdx.y * blockDim.y + threadIdx.y;
@@ -332,6 +344,46 @@ void relu_forward_launch(const float* X, float* Y, int input_dim, int batch_size
     dim3 grid_dim(1, batch_size);
     dim3 block_dim(block_x, 1);
     relu_forward_kernel<<<grid_dim, block_dim>>>(X, Y, input_dim, batch_size);
+}
+
+void relu_forward_test(int input_dim, int batch_size, int test_id)
+{
+    int n_elements_X = batch_size * input_dim;
+    int n_elements_Y = n_elements_X;
+
+    float* h_X = make_random_matrix(n_elements_X);
+    float* h_Y = (float*)malloc(sizeof(float) * n_elements_Y);
+    float* h_Y_ref = (float*)malloc(sizeof(float) * n_elements_Y);
+
+    float* d_X;
+    float* d_Y;
+    CHECK_CUDA(cudaMalloc(&d_X, sizeof(float) * n_elements_X));
+    CHECK_CUDA(cudaMalloc(&d_Y, sizeof(float) * n_elements_Y));
+    cudaMemcpy(d_X, h_X, sizeof(float) * n_elements_X, cudaMemcpyHostToDevice);
+
+    relu_forward_cpu_ref((const float*)h_X, h_Y_ref, input_dim, batch_size);
+    relu_forward_launch((const float*)d_X, d_Y, input_dim, batch_size);
+
+    cudaMemcpy(h_Y, d_Y, sizeof(float) * n_elements_Y, cudaMemcpyDeviceToHost);
+    
+    const float eps = 0.0001f;
+    if(!matrices_are_equal(h_Y, h_Y_ref, n_elements_Y, eps))
+    {
+        printf(
+            "relu_forward_test %d failed with input_dim = %d, batch_size = %d\n", 
+            test_id, input_dim, batch_size
+        );
+    }
+    else
+    {
+        printf("relu_forward_test %d passed\n", test_id);
+    }
+
+    cudaFree(d_X);
+    cudaFree(d_Y);
+    free(h_X);
+    free(h_Y);
+    free(h_Y_ref);
 }
 
 template<int rows_per_block, int input_dim, int batch_size>
@@ -635,12 +687,16 @@ void test_kernels()
     printf("Testing kernels...\n");
     
     fc_forward_test<tile_width>(256, 256, 32, 0);
-    fc_forward_test<tile_width>(input_dim, hidden_dim, batch_size, 0);
-    fc_forward_test<tile_width>(hidden_dim, output_dim, batch_size, 1);
+    fc_forward_test<tile_width>(input_dim, hidden_dim, batch_size, 1);
+    fc_forward_test<tile_width>(hidden_dim, output_dim, batch_size, 2);
 
     bias_forward_test(256, 32, 0);
     bias_forward_test(input_dim, batch_size, 1);
-    bias_forward_test(hidden_dim, batch_size, 1);
+    bias_forward_test(hidden_dim, batch_size, 2);
+
+    relu_forward_test(256, 32, 0);
+    relu_forward_test(hidden_dim, batch_size, 1);
+    relu_forward_test(output_dim, batch_size, 2);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
