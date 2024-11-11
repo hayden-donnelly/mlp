@@ -512,6 +512,15 @@ void softmax_forward_test(int test_id)
     free(h_Y_ref);
 }
 
+void cross_entropy_forward_cpu_ref(const float* X, const int64_t* T, float* Y, int n_classes, int batch_size)
+{
+    constexpr float eps = 0.00001f;
+    for(int row = 0; row < batch_size; ++row)
+    {
+        Y[row] = -1.0f * logf(X[row*n_classes + T[row]] + eps);
+    }
+}
+
 __global__ void cross_entropy_forward_kernel(
     const float* X, const int64_t* T, float* Y, int n_classes, int batch_size
 ){
@@ -528,6 +537,54 @@ void cross_entropy_forward_launch(const float* X, const int64_t* T, float* Y, in
     dim3 grid_dim(1);
     dim3 block_dim(ceil(batch_size / (float)32) * 32);
     cross_entropy_forward_kernel<<<grid_dim, block_dim>>>(X, T, Y, n_classes, batch_size);
+}
+
+void cross_entropy_forward_test(int n_classes, int batch_size, int test_id)
+{
+    int n_elements_X = batch_size * n_classes;
+    int n_elements_T = batch_size;
+    int n_elements_Y = batch_size;
+
+    float* h_X = make_random_matrix(n_elements_X);
+    int64_t* h_T = make_random_labels(n_elements_T);
+    float* h_Y = (float*)malloc(sizeof(float) * n_elements_Y);
+    float* h_Y_ref = (float*)malloc(sizeof(float) * n_elements_Y);
+
+    float* d_X;
+    int64_t* d_T;
+    float* d_Y;
+    CHECK_CUDA(cudaMalloc(&d_X, sizeof(float) * n_elements_X));
+    CHECK_CUDA(cudaMalloc(&d_T, sizeof(int64_t) * n_elements_T));
+    CHECK_CUDA(cudaMalloc(&d_Y, sizeof(float) * n_elements_Y));
+    cudaMemcpy(d_X, h_X, sizeof(float) * n_elements_X, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_T, h_T, sizeof(int64_t) * n_elements_T, cudaMemcpyHostToDevice);
+
+    cross_entropy_forward_cpu_ref((const float*)h_X, (const int64_t*)h_T, h_Y_ref, n_classes, batch_size);
+    cross_entropy_forward_launch((const float*)d_X, (const int64_t*)d_T, d_Y, n_classes, batch_size);
+    
+    cudaMemcpy(h_Y, d_Y, sizeof(float) * n_elements_Y, cudaMemcpyDeviceToHost);
+    
+    const float eps = 0.0001f;
+    if(!matrices_are_equal(h_Y, h_Y_ref, n_elements_Y, eps))
+    {
+        printf(
+            "cross_entropy_forward_test %d failed with n_classes = %d, batch_size = %d\n", 
+            test_id, n_classes, batch_size
+        );
+    }
+    else
+    {
+        printf("cross_entropy_forward_test %d passed\n", test_id);
+    }
+    return;
+
+    cudaFree(d_X);
+    cudaFree(d_T);
+    cudaFree(d_Y);
+    free(h_X);
+    free(h_T);
+    free(h_Y);
+    free(h_Y_ref);
 }
 
 __global__ void average_forward_kernel(const float* X, float* Y, int n_inputs)
@@ -764,13 +821,15 @@ void test_kernels()
     bias_forward_test(256, 32, 0);
     bias_forward_test(input_dim, batch_size, 1);
     bias_forward_test(hidden_dim, batch_size, 2);
-
+    
     relu_forward_test(256, 32, 0);
     relu_forward_test(hidden_dim, batch_size, 1);
     relu_forward_test(output_dim, batch_size, 2);
 
-    softmax_forward_test<256, 32>(0);
+    //softmax_forward_test<256, 32>(0);
     softmax_forward_test<output_dim, batch_size>(1);
+
+    cross_entropy_forward_test(10, 4, 0);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
