@@ -52,7 +52,7 @@ void device_to_host_and_print_int(int height, int width, int64_t* d_A)
     free(h_A);
 }
 
-void print_average_loss(float* d_losses, int n_losses)
+void print_average_loss(float* d_losses, int n_losses, int step)
 {
     size_t vec_size = sizeof(float) * n_losses;
     float* h_losses = (float*)malloc(vec_size);
@@ -62,7 +62,7 @@ void print_average_loss(float* d_losses, int n_losses)
     {
         sum += h_losses[i];
     }
-    printf("Loss: %f\n", sum / (float)n_losses);
+    printf("Step %d loss: %f\n", step, sum / (float)n_losses);
 }
 
 struct mlp_t
@@ -648,6 +648,66 @@ void zero_init(int height, int width, float* A)
     zero_init_kernel<<<grid_dim, block_dim>>>(A, n_elements);
 }
 
+void mlp_init(mlp_t* mlp, int input_dim, int hidden_dim, int output_dim, int batch_size)
+{
+    CHECK_CUDA(cudaMalloc(&mlp->fc1_w, sizeof(float) * input_dim * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->fc2_w, sizeof(float) * hidden_dim * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->fc1_b, sizeof(float) * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->fc2_b, sizeof(float) * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->input, sizeof(float) * batch_size * input_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->fc1_w_inter, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->fc1_b_inter, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->relu_inter, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->fc2_w_inter, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->fc2_b_inter, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->probs, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->ce_losses, sizeof(float) * batch_size));
+    CHECK_CUDA(cudaMalloc(&mlp->labels, sizeof(int64_t) * batch_size));
+    CHECK_CUDA(cudaMalloc(&mlp->avg_loss, sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&mlp->dL_dce, sizeof(float) * batch_size));
+    CHECK_CUDA(cudaMalloc(&mlp->dL_dprobs, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->dL_dlogits, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->dL_dfc2_b, sizeof(float) * batch_size * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->dL_dfc2_w, sizeof(float) * batch_size * hidden_dim * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->dL_drelu_inter, sizeof(float) * batch_size * hidden_dim * output_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->dL_dfc1_b_inter, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->dL_dfc1_b, sizeof(float) * batch_size * hidden_dim));
+    CHECK_CUDA(cudaMalloc(&mlp->dL_dfc1_w, sizeof(float) * batch_size * hidden_dim * input_dim));
+
+    // Initialize weights and biases.
+    random_normal_init(hidden_dim, input_dim, mlp->fc1_w, 0);
+    random_normal_init(hidden_dim, output_dim, mlp->fc2_w, 0);
+    zero_init(1, hidden_dim, mlp->fc1_b);
+    zero_init(1, output_dim, mlp->fc2_b);
+    zero_init(1, output_dim, mlp->probs);
+}
+
+void mlp_free(mlp_t* mlp)
+{
+    cudaFree(mlp->fc1_w);
+    cudaFree(mlp->fc1_b);
+    cudaFree(mlp->fc2_w);
+    cudaFree(mlp->fc2_b);
+    cudaFree(mlp->input);
+    cudaFree(mlp->fc1_w_inter);
+    cudaFree(mlp->fc1_b_inter);
+    cudaFree(mlp->relu_inter);
+    cudaFree(mlp->fc2_w_inter);
+    cudaFree(mlp->fc2_b_inter);
+    cudaFree(mlp->probs);
+    cudaFree(mlp->ce_losses);
+    cudaFree(mlp->avg_loss);
+    cudaFree(mlp->dL_dce);
+    cudaFree(mlp->dL_dprobs);
+    cudaFree(mlp->dL_dlogits);
+    cudaFree(mlp->dL_dfc2_b);
+    cudaFree(mlp->dL_dfc2_w);
+    cudaFree(mlp->dL_drelu_inter);
+    cudaFree(mlp->dL_dfc1_b_inter);
+    cudaFree(mlp->dL_dfc1_b);
+    cudaFree(mlp->dL_dfc1_w);
+}
+
 int main()
 {
     load_mnist();
@@ -659,39 +719,10 @@ int main()
     constexpr int output_dim = 10;
     constexpr int batch_size = 4;
     constexpr int tile_width = 32;
-    constexpr float learning_rate = -0.0001f;
-
+    constexpr float learning_rate = 0.0001f;
+    
     mlp_t mlp;
-    CHECK_CUDA(cudaMalloc(&mlp.fc1_w, sizeof(float) * input_dim * hidden_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.fc2_w, sizeof(float) * hidden_dim * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.fc1_b, sizeof(float) * hidden_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.fc2_b, sizeof(float) * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.input, sizeof(float) * batch_size * input_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.fc1_w_inter, sizeof(float) * batch_size * hidden_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.fc1_b_inter, sizeof(float) * batch_size * hidden_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.relu_inter, sizeof(float) * batch_size * hidden_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.fc2_w_inter, sizeof(float) * batch_size * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.fc2_b_inter, sizeof(float) * batch_size * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.probs, sizeof(float) * batch_size * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.ce_losses, sizeof(float) * batch_size));
-    CHECK_CUDA(cudaMalloc(&mlp.labels, sizeof(int64_t) * batch_size));
-    CHECK_CUDA(cudaMalloc(&mlp.avg_loss, sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_dce, sizeof(float) * batch_size));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_dprobs, sizeof(float) * batch_size * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_dlogits, sizeof(float) * batch_size * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc2_b, sizeof(float) * batch_size * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc2_w, sizeof(float) * batch_size * hidden_dim * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_drelu_inter, sizeof(float) * batch_size * hidden_dim * output_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc1_b_inter, sizeof(float) * batch_size * hidden_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc1_b, sizeof(float) * batch_size * hidden_dim));
-    CHECK_CUDA(cudaMalloc(&mlp.dL_dfc1_w, sizeof(float) * batch_size * hidden_dim * input_dim));
-
-    // Initialize weights and biases.
-    random_normal_init(hidden_dim, input_dim, mlp.fc1_w, 0);
-    random_normal_init(hidden_dim, output_dim, mlp.fc2_w, 0);
-    zero_init(1, hidden_dim, mlp.fc1_b);
-    zero_init(1, output_dim, mlp.fc2_b);
-    zero_init(1, output_dim, mlp.probs);
+    mlp_init(&mlp, input_dim, hidden_dim, output_dim, batch_size);
     printf("Initialized weights and biases\n");
 
     int batch_start_idx = 0;
@@ -700,7 +731,7 @@ int main()
     for(int i = 0; i < batch_size; ++i)
     {
         batch_labels[i] = (int64_t)train_label[batch_start_idx + i];
-        printf("%d\n", batch_labels[i]);
+        //printf("%d\n", batch_labels[i]);
     }
     cudaMemcpy(
         mlp.input, &train_image[batch_start_idx], 
@@ -711,33 +742,15 @@ int main()
         sizeof(int64_t) * batch_size, cudaMemcpyHostToDevice
     );
     
-    for(int i = 0; i < 10000; ++i)
+    for(int i = 0; i < 30000; ++i)
     {
         forward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
         backward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp, learning_rate);
-        print_average_loss(mlp.ce_losses, batch_size);
+        if(i % 1000 == 0)
+        {
+            print_average_loss(mlp.ce_losses, batch_size, i);
+        }
     }
-        
-    cudaFree(mlp.fc1_w);
-    cudaFree(mlp.fc1_b);
-    cudaFree(mlp.fc2_w);
-    cudaFree(mlp.fc2_b);
-    cudaFree(mlp.input);
-    cudaFree(mlp.fc1_w_inter);
-    cudaFree(mlp.fc1_b_inter);
-    cudaFree(mlp.relu_inter);
-    cudaFree(mlp.fc2_w_inter);
-    cudaFree(mlp.fc2_b_inter);
-    cudaFree(mlp.probs);
-    cudaFree(mlp.ce_losses);
-    cudaFree(mlp.avg_loss);
-    cudaFree(mlp.dL_dce);
-    cudaFree(mlp.dL_dprobs);
-    cudaFree(mlp.dL_dlogits);
-    cudaFree(mlp.dL_dfc2_b);
-    cudaFree(mlp.dL_dfc2_w);
-    cudaFree(mlp.dL_drelu_inter);
-    cudaFree(mlp.dL_dfc1_b_inter);
-    cudaFree(mlp.dL_dfc1_b);
-    cudaFree(mlp.dL_dfc1_w);
+
+    mlp_free(&mlp);
 }
