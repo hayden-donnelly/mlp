@@ -136,10 +136,10 @@ __global__ void fc_forward_kernel(
     int col = block_x * tile_width + thread_x;
 
     float Y_val = 0.0f;
-    for(int ph = 0; ph < ceil(output_dim/(float)tile_width); ++ph)
+    for(int ph = 0; ph < ceil(input_dim/(float)tile_width); ++ph)
     {
         // Load W tile into shared memory.
-        if(row < output_dim && ph*tile_width + thread_x < input_dim)
+        if(col < output_dim && ph*tile_width + thread_y < input_dim)
         {
             // Tiled vertically.
             W_s[thread_y][thread_x] = W[(ph*tile_width + thread_y)*output_dim + col];
@@ -150,7 +150,7 @@ __global__ void fc_forward_kernel(
         }
 
         // Load X tile into shared memory.
-        if(col < input_dim && ph*tile_width + thread_y < output_dim)
+        if(row < batch_size && ph*tile_width + thread_x < input_dim)
         {
             // Tiled horizontally. 
             X_s[thread_y][thread_x] = X[row*input_dim + ph*tile_width + thread_x];
@@ -183,11 +183,12 @@ void fc_forward_launch(
     const int block_size = 32;
     dim3 grid_dim((output_dim + tile_width - 1) / tile_width, (batch_size + tile_width - 1) / tile_width);
     dim3 block_dim(tile_width, tile_width);
+
     fc_forward_kernel<tile_width><<<grid_dim, block_dim>>>(W, X, Y, input_dim, output_dim, batch_size);
 }
 
 template<int tile_width>
-void fc_forward_test(int input_dim, int output_dim, int batch_size)
+void fc_forward_test(int input_dim, int output_dim, int batch_size, int test_id)
 {
     int n_elements_W = input_dim * output_dim;
     int n_elements_X = batch_size * input_dim;
@@ -210,16 +211,28 @@ void fc_forward_test(int input_dim, int output_dim, int batch_size)
     fc_forward_cpu_ref((const float*)h_W, (const float*)h_X, h_Y_ref, input_dim, output_dim, batch_size);
     fc_forward_launch<tile_width>((const float*)d_W, (const float*)d_X, d_Y, input_dim, output_dim, batch_size);
 
-    cudaMemcpy(h_Y_ref, d_Y, sizeof(float) * n_elements_Y, cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_Y, d_Y, sizeof(float) * n_elements_Y, cudaMemcpyDeviceToHost);
 
     const float eps = 0.0001f;
     if(!matrices_are_equal(h_Y, h_Y_ref, n_elements_Y, eps))
     {
         printf(
-            "fc_forward_test failed with input_dim = %d, output_dim = %d, batch_size = %d\n", 
-            input_dim, output_dim, batch_size
+            "fc_forward_test %d failed with input_dim = %d, output_dim = %d, batch_size = %d\n", 
+            test_id, input_dim, output_dim, batch_size
         );
     }
+    else
+    {
+        printf("fc_forward_test %d passed\n", test_id);
+    }
+
+    cudaFree(d_W);
+    cudaFree(d_X);
+    cudaFree(d_Y);
+    free(h_W);
+    free(h_X);
+    free(h_Y);
+    free(h_Y_ref);
 }
 
 __global__ void bias_forward_kernel(const float* B, const float* X, float* Y, int input_dim, int batch_size)
@@ -562,8 +575,9 @@ template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batc
 void test_kernels()
 {
     printf("Testing kernels...\n");
-    fc_forward_test<tile_width>(input_dim, hidden_dim, batch_size);
-    fc_forward_test<tile_width>(hidden_dim, output_dim, batch_size);
+    fc_forward_test<tile_width>(256, 256, 32, 0);
+    fc_forward_test<tile_width>(input_dim, hidden_dim, batch_size, 0);
+    fc_forward_test<tile_width>(hidden_dim, output_dim, batch_size, 1);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
