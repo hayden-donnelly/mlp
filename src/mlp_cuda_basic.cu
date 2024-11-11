@@ -52,6 +52,19 @@ void device_to_host_and_print_int(int height, int width, int64_t* d_A)
     free(h_A);
 }
 
+void print_average_loss(float* d_losses, int n_losses)
+{
+    size_t vec_size = sizeof(float) * n_losses;
+    float* h_losses = (float*)malloc(vec_size);
+    cudaMemcpy(h_losses, d_losses, vec_size, cudaMemcpyDeviceToHost);
+    float sum = 0.0f;
+    for(int i = 0; i < n_losses; ++i)
+    {
+        sum += h_losses[i];
+    }
+    printf("Loss: %f\n", sum / (float)n_losses);
+}
+
 struct mlp_t
 {
     float* fc1_w;
@@ -482,10 +495,10 @@ void gradient_descent_launch(float* grad, float* params, float learning_rate, in
     dim3 grid_dim(n_blocks);
     gradient_descent_kernel<<<grid_dim, block_dim>>>(grad, params, learning_rate, n_elements, batch_size);
     
-    printf("total_threads %d\n", total_threads);
+    /*printf("total_threads %d\n", total_threads);
     printf("n_blocks %d\n", n_blocks);
     printf("block_dim.x %d\n", block_dim.x);
-    printf("grid_dim.x %d\n", grid_dim.x);
+    printf("grid_dim.x %d\n", grid_dim.x);*/
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
@@ -527,18 +540,18 @@ void forward_pass(mlp_t* mlp)
     );
     average_forward_launch((const float*)mlp->ce_losses, mlp->avg_loss, batch_size);
     
-    printf("fc2_b_inter:\n");
+    /*printf("fc2_b_inter:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->fc2_b_inter);
     printf("probs:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->probs);
     printf("ce_losses:\n");
     device_to_host_and_print(batch_size, 1, mlp->ce_losses);
     printf("avg_loss:\n");
-    device_to_host_and_print(1, 1, mlp->avg_loss); 
+    device_to_host_and_print(1, 1, mlp->avg_loss);*/
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size>
-void backward_pass(mlp_t* mlp)
+void backward_pass(mlp_t* mlp, float learning_rate)
 {
     average_backward_launch(mlp->dL_dce, batch_size);
     cross_entropy_backward_launch(
@@ -570,12 +583,13 @@ void backward_pass(mlp_t* mlp)
         (const float*)mlp->dL_dfc1_b, (const float*)mlp->input, 
         mlp->dL_dfc1_w, input_dim, hidden_dim, batch_size
     );
-
-    float learning_rate = 0.0001f;
+    
     gradient_descent_launch(mlp->dL_dfc2_b, mlp->fc2_b, learning_rate, output_dim, batch_size);
     gradient_descent_launch(mlp->dL_dfc2_w, mlp->fc2_w, learning_rate, hidden_dim*output_dim, batch_size);
+    gradient_descent_launch(mlp->dL_dfc1_b, mlp->fc1_b, learning_rate, hidden_dim, batch_size);
+    gradient_descent_launch(mlp->dL_dfc1_w, mlp->fc1_w, learning_rate, input_dim*hidden_dim, batch_size);
 
-    printf("dL_dce:\n");
+    /*printf("dL_dce:\n");
     device_to_host_and_print(batch_size, 1, mlp->dL_dce);
     printf("dL_dprobs:\n");
     device_to_host_and_print(batch_size, output_dim, mlp->dL_dprobs);
@@ -592,7 +606,7 @@ void backward_pass(mlp_t* mlp)
     //printf("dL_dfc1_b:\n");
     //device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b);
     //printf("dL_dfc1_w:\n");
-    //device_to_host_and_print(hidden_dim, input_dim, mlp->dL_dfc1_w);
+    //device_to_host_and_print(hidden_dim, input_dim, mlp->dL_dfc1_w);*/
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -645,6 +659,7 @@ int main()
     constexpr int output_dim = 10;
     constexpr int batch_size = 4;
     constexpr int tile_width = 32;
+    constexpr float learning_rate = -0.0001f;
 
     mlp_t mlp;
     CHECK_CUDA(cudaMalloc(&mlp.fc1_w, sizeof(float) * input_dim * hidden_dim));
@@ -696,8 +711,13 @@ int main()
         sizeof(int64_t) * batch_size, cudaMemcpyHostToDevice
     );
     
-    forward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
-    backward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
+    for(int i = 0; i < 10000; ++i)
+    {
+        forward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
+        backward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp, learning_rate);
+        print_average_loss(mlp.ce_losses, batch_size);
+    }
+        
     cudaFree(mlp.fc1_w);
     cudaFree(mlp.fc1_b);
     cudaFree(mlp.fc2_w);
