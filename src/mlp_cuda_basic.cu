@@ -429,12 +429,12 @@ void fc_backward_x_launch(
 ){
     dim3 block_dim(ceil(input_dim / (float)32) * 32, 1);
     dim3 grid_dim(1, batch_size);
-    fc_backward_x_kernel<<<block_dim, grid_dim>>>(dL_dY, X, dL_dX, input_dim, output_dim, batch_size);
+    fc_backward_x_kernel<<<grid_dim, block_dim>>>(dL_dY, X, dL_dX, input_dim, output_dim, batch_size);
 
-    printf("block_dim.x %d\n", block_dim.x);
+    /*printf("block_dim.x %d\n", block_dim.x);
     printf("block_dim.y %d\n", block_dim.y);
     printf("grid_dim.x %d\n", grid_dim.x);
-    printf("grid_dim.y %d\n", grid_dim.y);
+    printf("grid_dim.y %d\n", grid_dim.y);*/
 }
 
 __global__ void relu_backward_kernel(
@@ -457,6 +457,35 @@ void relu_backward_launch(
     dim3 grid_dim(1, batch_size);
     dim3 block_dim(block_x, 1);
     relu_backward_kernel<<<grid_dim, block_dim>>>(dL_dY, X, dL_dX, input_dim, batch_size);
+}
+
+__global__ void gradient_descent_kernel(
+    float* grad, float* params, float learning_rate, int n_elements, int batch_size
+){
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if(idx < n_elements)
+    {
+        float grad_sum = 0.0f;
+        for(int batch = 0; batch < batch_size; ++batch)
+        {
+            grad_sum += grad[batch*n_elements + idx];
+        }
+        params[idx] -= learning_rate * grad_sum;
+    }
+}
+
+void gradient_descent_launch(float* grad, float* params, float learning_rate, int n_elements, int batch_size)
+{
+    const int total_threads = ceil(n_elements / (float)32) * 32;
+    const int n_blocks = ceil(total_threads / (float)1024);
+    dim3 block_dim(ceil(total_threads / (float)n_blocks));
+    dim3 grid_dim(n_blocks);
+    gradient_descent_kernel<<<grid_dim, block_dim>>>(grad, params, learning_rate, n_elements, batch_size);
+    
+    printf("total_threads %d\n", total_threads);
+    printf("n_blocks %d\n", n_blocks);
+    printf("block_dim.x %d\n", block_dim.x);
+    printf("grid_dim.x %d\n", grid_dim.x);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
@@ -542,6 +571,10 @@ void backward_pass(mlp_t* mlp)
         mlp->dL_dfc1_w, input_dim, hidden_dim, batch_size
     );
 
+    float learning_rate = 0.0001f;
+    gradient_descent_launch(mlp->dL_dfc2_b, mlp->fc2_b, learning_rate, output_dim, batch_size);
+    gradient_descent_launch(mlp->dL_dfc2_w, mlp->fc2_w, learning_rate, hidden_dim*output_dim, batch_size);
+
     printf("dL_dce:\n");
     device_to_host_and_print(batch_size, 1, mlp->dL_dce);
     printf("dL_dprobs:\n");
@@ -554,10 +587,10 @@ void backward_pass(mlp_t* mlp)
     //device_to_host_and_print(output_dim, hidden_dim, mlp->dL_dfc2_w);
     //printf("dL_drelu_inter:\n");
     //device_to_host_and_print(batch_size, hidden_dim, mlp->dL_drelu_inter);
-    printf("dL_dfc1_b_inter:\n");
-    device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b_inter);
-    printf("dL_dfc1_b:\n");
-    device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b);
+    //printf("dL_dfc1_b_inter:\n");
+    //device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b_inter);
+    //printf("dL_dfc1_b:\n");
+    //device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b);
     //printf("dL_dfc1_w:\n");
     //device_to_host_and_print(hidden_dim, input_dim, mlp->dL_dfc1_w);
 }
@@ -645,7 +678,6 @@ int main()
     zero_init(1, output_dim, mlp.fc2_b);
     zero_init(1, output_dim, mlp.probs);
     printf("Initialized weights and biases\n");
-
 
     int batch_start_idx = 0;
     // Cast batch labels to int64_t.
