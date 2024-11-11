@@ -6,6 +6,7 @@
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include "mnist.hpp"
+#include "matrix_utils.hpp"
 
 #define CHECK_CUDA(expression) \
 { \
@@ -95,6 +96,26 @@ struct mlp_t
     int64_t* labels;
 };
 
+void fc_forward_cpu_ref(
+    const float* W, // Shape: (input_dim, output_dim)
+    const float* X, // Shape: (batch_size, input_dim)
+    float* Y,       // Shape: (batch_size, output_dim) 
+    int input_dim, int output_dim, int batch_size
+){
+    for(int row = 0; row < batch_size; ++row)
+    {
+        for(int col = 0; col < output_dim; ++col)
+        {
+            float Y_val = 0.0f;
+            for(int k = 0; k < input_dim; ++k)
+            {
+                Y_val += X[row*input_dim + k] * W[k*output_dim + col];
+            }
+            Y[row*output_dim + col] = Y_val;
+        }
+    }
+}
+
 // TODO: I think there are incorrect memory indices in this kernel and need to double check them.
 template<int tile_width>
 __global__ void fc_forward_kernel(
@@ -163,6 +184,42 @@ void fc_forward_launch(
     dim3 grid_dim((output_dim + tile_width - 1) / tile_width, (batch_size + tile_width - 1) / tile_width);
     dim3 block_dim(tile_width, tile_width);
     fc_forward_kernel<tile_width><<<grid_dim, block_dim>>>(W, X, Y, input_dim, output_dim, batch_size);
+}
+
+template<int tile_width>
+void fc_forward_test(int input_dim, int output_dim, int batch_size)
+{
+    int n_elements_W = input_dim * output_dim;
+    int n_elements_X = batch_size * input_dim;
+    int n_elements_Y = batch_size * output_dim;
+
+    float* h_W = make_random_matrix(n_elements_W);
+    float* h_X = make_random_matrix(n_elements_W);
+    float* h_Y = (float*)malloc(sizeof(float) * n_elements_Y);
+    float* h_Y_ref = (float*)malloc(sizeof(float) * n_elements_Y);
+
+    float* d_W;
+    float* d_X;
+    float* d_Y;
+    CHECK_CUDA(cudaMalloc(&d_W, sizeof(float) * n_elements_W));
+    CHECK_CUDA(cudaMalloc(&d_X, sizeof(float) * n_elements_X));
+    CHECK_CUDA(cudaMalloc(&d_Y, sizeof(float) * n_elements_Y));
+    cudaMemcpy(d_W, h_W, sizeof(float) * n_elements_W, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_X, h_X, sizeof(float) * n_elements_X, cudaMemcpyHostToDevice);
+
+    fc_forward_cpu_ref((const float*)h_W, (const float*)h_X, h_Y_ref, input_dim, output_dim, batch_size);
+    fc_forward_launch<tile_width>((const float*)d_W, (const float*)d_X, d_Y, input_dim, output_dim, batch_size);
+
+    cudaMemcpy(h_Y_ref, d_Y, sizeof(float) * n_elements_Y, cudaMemcpyDeviceToHost);
+
+    const float eps = 0.0001f;
+    if(!matrices_are_equal(h_Y, h_Y_ref, n_elements_Y, eps))
+    {
+        printf(
+            "fc_forward_test failed with input_dim = %d, output_dim = %d, batch_size = %d\n", 
+            input_dim, output_dim, batch_size
+        );
+    }
 }
 
 __global__ void bias_forward_kernel(const float* B, const float* X, float* Y, int input_dim, int batch_size)
@@ -501,6 +558,14 @@ void gradient_descent_launch(float* grad, float* params, float learning_rate, in
     printf("grid_dim.x %d\n", grid_dim.x);*/
 }
 
+template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size>
+void test_kernels()
+{
+    printf("Testing kernels...\n");
+    fc_forward_test<tile_width>(input_dim, hidden_dim, batch_size);
+    fc_forward_test<tile_width>(hidden_dim, output_dim, batch_size);
+}
+
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
 void forward_pass(mlp_t* mlp)
 {
@@ -516,16 +581,6 @@ void forward_pass(mlp_t* mlp)
         (const float*)mlp->fc1_w_inter, mlp->relu_inter, hidden_dim, batch_size
     );
 
-    /*printf("fc1_w_inter:\n");
-    device_to_host_and_print(batch_size, hidden_dim, mlp->fc1_w_inter);
-    printf("\n");
-    printf("fc1_b_inter:\n");
-    device_to_host_and_print(batch_size, hidden_dim, mlp->fc1_b_inter);
-    printf("\n");
-    printf("relu_inter:\n");
-    device_to_host_and_print(batch_size, hidden_dim, mlp->relu_inter);
-    printf("\n");*/
-
     fc_forward_launch<tile_width>(
         (const float*)mlp->fc2_w, (const float*)mlp->relu_inter, mlp->fc2_w_inter,
         hidden_dim, output_dim, batch_size
@@ -539,15 +594,6 @@ void forward_pass(mlp_t* mlp)
         (const float*)mlp->probs, (const int64_t*)mlp->labels, mlp->ce_losses, 10, batch_size
     );
     average_forward_launch((const float*)mlp->ce_losses, mlp->avg_loss, batch_size);
-    
-    /*printf("fc2_b_inter:\n");
-    device_to_host_and_print(batch_size, output_dim, mlp->fc2_b_inter);
-    printf("probs:\n");
-    device_to_host_and_print(batch_size, output_dim, mlp->probs);
-    printf("ce_losses:\n");
-    device_to_host_and_print(batch_size, 1, mlp->ce_losses);
-    printf("avg_loss:\n");
-    device_to_host_and_print(1, 1, mlp->avg_loss);*/
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size>
@@ -588,25 +634,6 @@ void backward_pass(mlp_t* mlp, float learning_rate)
     gradient_descent_launch(mlp->dL_dfc2_w, mlp->fc2_w, learning_rate, hidden_dim*output_dim, batch_size);
     gradient_descent_launch(mlp->dL_dfc1_b, mlp->fc1_b, learning_rate, hidden_dim, batch_size);
     gradient_descent_launch(mlp->dL_dfc1_w, mlp->fc1_w, learning_rate, input_dim*hidden_dim, batch_size);
-
-    /*printf("dL_dce:\n");
-    device_to_host_and_print(batch_size, 1, mlp->dL_dce);
-    printf("dL_dprobs:\n");
-    device_to_host_and_print(batch_size, output_dim, mlp->dL_dprobs);
-    printf("dL_dlogits:\n");
-    device_to_host_and_print(batch_size, output_dim, mlp->dL_dlogits);
-    printf("dL_dfc2_b:\n");
-    device_to_host_and_print(batch_size, output_dim, mlp->dL_dfc2_b);
-    //printf("dL_dfc2_w:\n");
-    //device_to_host_and_print(output_dim, hidden_dim, mlp->dL_dfc2_w);
-    //printf("dL_drelu_inter:\n");
-    //device_to_host_and_print(batch_size, hidden_dim, mlp->dL_drelu_inter);
-    //printf("dL_dfc1_b_inter:\n");
-    //device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b_inter);
-    //printf("dL_dfc1_b:\n");
-    //device_to_host_and_print(batch_size, hidden_dim, mlp->dL_dfc1_b);
-    //printf("dL_dfc1_w:\n");
-    //device_to_host_and_print(hidden_dim, input_dim, mlp->dL_dfc1_w);*/
 }
 
 // Initialize weights to random values following a normal distribution.
@@ -720,7 +747,8 @@ int main()
     constexpr int batch_size = 4;
     constexpr int tile_width = 32;
     constexpr float learning_rate = 0.0001f;
-    
+    test_kernels<tile_width, input_dim, hidden_dim, output_dim, batch_size>();
+
     mlp_t mlp;
     mlp_init(&mlp, input_dim, hidden_dim, output_dim, batch_size);
     printf("Initialized weights and biases\n");
