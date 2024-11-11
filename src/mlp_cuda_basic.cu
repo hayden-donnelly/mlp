@@ -386,6 +386,36 @@ void relu_forward_test(int input_dim, int batch_size, int test_id)
     free(h_Y_ref);
 }
 
+void softmax_forward_cpu_ref(const float* X, float* Y, int input_dim, int batch_size)
+{
+    for(int row = 0; row < batch_size; ++row)
+    {
+        // Find each row's maxmimum value. 
+        float row_max = -FLT_MAX;
+        for(int col = 0; col < input_dim; ++col)
+        {
+            float X_val = X[row*input_dim + col];
+            if(row_max < X_val)
+            {
+                row_max = X_val;
+            }
+        }
+
+        // Calculate the row's sum of exponentials.
+        float row_exp_sum = 0.0f;
+        for(int col = 0; col < input_dim; ++col)
+        {
+            row_exp_sum += expf(X[row*input_dim + col] - row_max);
+        }
+
+        // Calculate final output.
+        for(int col = 0; col < input_dim; ++col)
+        {
+            Y[row*input_dim + col] = expf(X[row*input_dim + col] - row_max) / row_exp_sum;
+        }
+    }
+}
+
 template<int rows_per_block, int input_dim, int batch_size>
 __global__ void softmax_forward_kernel(const float* X, float* Y)
 {
@@ -439,6 +469,47 @@ void softmax_forward_launch(const float* X, float* Y)
     dim3 grid_dim((batch_size + rows_per_block - 1) / rows_per_block);
     dim3 block_dim(ceil((rows_per_block * input_dim) / (float)32) * 32);
     softmax_forward_kernel<rows_per_block, input_dim, batch_size><<<grid_dim, block_dim>>>(X, Y);
+}
+
+template<int input_dim, int batch_size>
+void softmax_forward_test(int test_id)
+{
+    int n_elements_X = batch_size * input_dim;
+    int n_elements_Y = n_elements_X;
+
+    float* h_X = make_random_matrix(n_elements_X);
+    float* h_Y = (float*)malloc(sizeof(float) * n_elements_Y);
+    float* h_Y_ref = (float*)malloc(sizeof(float) * n_elements_Y);
+
+    float* d_X;
+    float* d_Y;
+    CHECK_CUDA(cudaMalloc(&d_X, sizeof(float) * n_elements_X));
+    CHECK_CUDA(cudaMalloc(&d_Y, sizeof(float) * n_elements_Y));
+    cudaMemcpy(d_X, h_X, sizeof(float) * n_elements_X, cudaMemcpyHostToDevice);
+
+    softmax_forward_cpu_ref((const float*)h_X, h_Y_ref, input_dim, batch_size);
+    softmax_forward_launch<input_dim, batch_size>((const float*)d_X, d_Y);
+
+    cudaMemcpy(h_Y, d_Y, sizeof(float) * n_elements_Y, cudaMemcpyDeviceToHost);
+    
+    const float eps = 0.0001f;
+    if(!matrices_are_equal(h_Y, h_Y_ref, n_elements_Y, eps))
+    {
+        printf(
+            "softmax_forward_test %d failed with input_dim = %d, batch_size = %d\n", 
+            test_id, input_dim, batch_size
+        );
+    }
+    else
+    {
+        printf("softmax_forward_test %d passed\n", test_id);
+    }
+
+    cudaFree(d_X);
+    cudaFree(d_Y);
+    free(h_X);
+    free(h_Y);
+    free(h_Y_ref);
 }
 
 __global__ void cross_entropy_forward_kernel(
@@ -697,6 +768,9 @@ void test_kernels()
     relu_forward_test(256, 32, 0);
     relu_forward_test(hidden_dim, batch_size, 1);
     relu_forward_test(output_dim, batch_size, 2);
+
+    softmax_forward_test<256, 32>(0);
+    softmax_forward_test<output_dim, batch_size>(1);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
