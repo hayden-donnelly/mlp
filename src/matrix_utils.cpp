@@ -21,7 +21,6 @@ bool matrices_are_equal(float* A, float* B, int n_elements, float eps)
     {
         if(fabs(A[i] - B[i]) > eps)
         {
-            printf("failed at %d with A[i] = %f and B[i] = %f\n", i, A[i], B[i]);
             return false;
         }
     }
