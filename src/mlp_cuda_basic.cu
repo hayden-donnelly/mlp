@@ -732,6 +732,20 @@ void cross_entropy_backward_test(int n_classes, int batch_size, int test_id)
     free(h_dL_dprobs_ref);
 }
 
+void softmax_backward_cpu_ref(
+    const float* probs, const int64_t* labels, float* dL_dlogits, int n_classes, int batch_size
+){
+    for(int row = 0; row < batch_size; ++row)
+    {
+        int64_t label = labels[row];
+        for(int col = 0; col < batch_size; ++col)
+        {
+            float label_term = (label == col) ? 1.0f : 0.0f;
+            dL_dlogits[row*n_classes + col] = probs[row*n_classes + col] - label_term;
+        }
+    }
+}
+
 __global__ void softmax_backward_kernel(
     const float* probs, const int64_t* labels, float* dL_dlogits, int n_classes, int batch_size
 ){
@@ -748,6 +762,57 @@ void softmax_backward_launch(
 ){
     const int block_x = ceil((n_classes * batch_size) / (float)32) * 32;
     softmax_backward_kernel<<<1, block_x>>>(probs, labels, dL_dlogits, n_classes, batch_size);
+}
+
+void softmax_backward_test(int n_classes, int batch_size, int test_id)
+{
+    int n_elements_probs = batch_size * n_classes;
+    int n_elements_labels = batch_size;
+    int n_elements_dL_dlogits = batch_size * n_classes;
+
+    float* h_probs = make_random_matrix(n_elements_probs, 0.0f, 1.0f);
+    int64_t* h_labels = make_random_labels(n_elements_labels); 
+    float* h_dL_dlogits = (float*)malloc(sizeof(float) * n_elements_dL_dlogits);
+    float* h_dL_dlogits_ref = (float*)malloc(sizeof(float) * n_elements_dL_dlogits);
+
+    float* d_probs;
+    int64_t* d_labels;
+    float* d_dL_dlogits;
+    CHECK_CUDA(cudaMalloc(&d_probs, sizeof(float) * n_elements_probs));
+    CHECK_CUDA(cudaMalloc(&d_labels, sizeof(int64_t) * n_elements_labels));
+    CHECK_CUDA(cudaMalloc(&d_dL_dlogits, sizeof(float) * n_elements_dL_dlogits));
+    cudaMemcpy(d_probs, h_probs, sizeof(float) * n_elements_probs, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_labels, h_labels, sizeof(int64_t) * n_elements_labels, cudaMemcpyHostToDevice);
+
+    softmax_backward_cpu_ref(
+        (const float*)h_probs, (const int64_t*)h_labels, h_dL_dlogits_ref, n_classes, batch_size
+    );
+    softmax_backward_launch(
+        (const float*)d_probs, (const int64_t*)d_labels, d_dL_dlogits, n_classes, batch_size
+    );
+
+    cudaMemcpy(h_dL_dlogits, d_dL_dlogits, sizeof(float) * n_elements_dL_dlogits, cudaMemcpyDeviceToHost);
+    
+    const float eps = 0.0001f;
+    if(!matrices_are_equal(h_dL_dlogits, h_dL_dlogits_ref, n_elements_dL_dlogits, eps))
+    {
+        printf(
+            "softmax_backward_test %d failed with n_classes = %d, batch_size = %d\n", 
+            test_id, n_classes, batch_size
+        );
+    }
+    else
+    {
+        printf("softmax_backward_test %d passed\n", test_id);
+    }
+
+    cudaFree(d_probs);
+    cudaFree(d_labels);
+    cudaFree(d_dL_dlogits);
+    free(h_probs);
+    free(h_labels);
+    free(h_dL_dlogits);
+    free(h_dL_dlogits_ref);
 }
 
 __global__ void bias_backward_kernel(
@@ -905,6 +970,7 @@ void test_kernels()
 
     // Backward kernels.
     cross_entropy_backward_test(output_dim, batch_size, 0);
+    softmax_backward_test(output_dim, batch_size, 0);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
