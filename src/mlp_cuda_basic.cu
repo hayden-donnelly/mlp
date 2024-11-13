@@ -738,7 +738,7 @@ void softmax_backward_cpu_ref(
     for(int row = 0; row < batch_size; ++row)
     {
         int64_t label = labels[row];
-        for(int col = 0; col < batch_size; ++col)
+        for(int col = 0; col < n_classes; ++col)
         {
             float label_term = (label == col) ? 1.0f : 0.0f;
             dL_dlogits[row*n_classes + col] = probs[row*n_classes + col] - label_term;
@@ -746,6 +746,7 @@ void softmax_backward_cpu_ref(
     }
 }
 
+// TODO: figure out if the chain rule is being applied correctly to propagate dL_dprobs.
 __global__ void softmax_backward_kernel(
     const float* probs, const int64_t* labels, float* dL_dlogits, int n_classes, int batch_size
 ){
