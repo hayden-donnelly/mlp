@@ -916,13 +916,13 @@ void fc_backward_w_test(int input_dim, int output_dim, int batch_size, int test_
     if(!matrices_are_equal(h_dL_dW, h_dL_dW_ref, n_elements_dL_dW, eps))
     {
         printf(
-            "fc_backward_test %d failed with input_dim = %d, output_dim = %d, batch_size = %d\n", 
+            "fc_backward_w_test %d failed with input_dim = %d, output_dim = %d, batch_size = %d\n", 
             test_id, input_dim, output_dim, batch_size
         );
     }
     else
     {
-        printf("fc_backward_test %d passed\n", test_id);
+        printf("fc_backward_w_test %d passed\n", test_id);
     }
 
     cudaFree(d_dL_dY);
@@ -932,6 +932,24 @@ void fc_backward_w_test(int input_dim, int output_dim, int batch_size, int test_
     free(h_X);
     free(h_dL_dW);
     free(h_dL_dW_ref);
+}
+
+void fc_backward_x_cpu_ref(
+    const float* dL_dY, const float* W, float* dL_dX, 
+    int input_dim, int output_dim, int batch_size
+){
+    for(int batch = 0; batch < batch_size; ++batch)
+    {
+        for(int idx = 0; idx < input_dim; ++idx)
+        {
+            float val = 0.0f;
+            for(int k = 0; k < output_dim; ++k)
+            {
+                val += dL_dY[batch*output_dim + k] * W[k*input_dim + idx];
+            }
+            dL_dX[batch*input_dim + idx] = val;
+        }
+    }
 }
 
 __global__ void fc_backward_x_kernel(
@@ -953,17 +971,69 @@ __global__ void fc_backward_x_kernel(
 }
 
 void fc_backward_x_launch(
-    const float* dL_dY, const float* X, float* dL_dX,
+    const float* dL_dY, const float* W, float* dL_dX,
     int input_dim, int output_dim, int batch_size
 ){
     dim3 block_dim(ceil(input_dim / (float)32) * 32, 1);
     dim3 grid_dim(1, batch_size);
-    fc_backward_x_kernel<<<grid_dim, block_dim>>>(dL_dY, X, dL_dX, input_dim, output_dim, batch_size);
+    fc_backward_x_kernel<<<grid_dim, block_dim>>>(dL_dY, W, dL_dX, input_dim, output_dim, batch_size);
 
     /*printf("block_dim.x %d\n", block_dim.x);
     printf("block_dim.y %d\n", block_dim.y);
     printf("grid_dim.x %d\n", grid_dim.x);
     printf("grid_dim.y %d\n", grid_dim.y);*/
+}
+
+void fc_backward_x_test(int input_dim, int output_dim, int batch_size, int test_id)
+{
+    int n_elements_dL_dY = batch_size * output_dim;
+    int n_elements_W = batch_size * input_dim;
+    int n_elements_dL_dX = batch_size * input_dim;
+
+    float* h_dL_dY = make_random_matrix(n_elements_dL_dY, -1.0f, 1.0f);
+    float* h_W = make_random_matrix(n_elements_W, -1.0f, 1.0f);
+    float* h_dL_dX = (float*)malloc(sizeof(float) * n_elements_dL_dX);
+    float* h_dL_dX_ref = (float*)malloc(sizeof(float) * n_elements_dL_dX);
+
+    float* d_dL_dY;
+    float* d_W;
+    float* d_dL_dX;
+    CHECK_CUDA(cudaMalloc(&d_dL_dY, sizeof(float) * n_elements_dL_dY));
+    CHECK_CUDA(cudaMalloc(&d_W, sizeof(float) * n_elements_W));
+    CHECK_CUDA(cudaMalloc(&d_dL_dX, sizeof(float) * n_elements_dL_dX));
+    cudaMemcpy(d_dL_dY, h_dL_dY, sizeof(float) * n_elements_dL_dY, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_W, h_W, sizeof(float) * n_elements_W, cudaMemcpyHostToDevice);
+
+    fc_backward_x_cpu_ref(
+        (const float*)h_dL_dY, (const float*)h_W, h_dL_dX_ref, input_dim, output_dim, batch_size
+    );
+    fc_backward_x_launch(
+        (const float*)d_dL_dY, (const float*)d_W, d_dL_dX, input_dim, output_dim, batch_size
+    );
+
+    cudaMemcpy(h_dL_dX, d_dL_dX, sizeof(float) * n_elements_dL_dX, cudaMemcpyDeviceToHost);
+
+    const float eps = 0.0001f;
+    if(!matrices_are_equal(h_dL_dX, h_dL_dX_ref, n_elements_dL_dX, eps))
+    {
+        printf(
+            "fc_backward_x_test %d failed with input_dim = %d, output_dim = %d, batch_size = %d\n", 
+            test_id, input_dim, output_dim, batch_size
+        );
+    }
+    else
+    {
+        printf("fc_backward_x_test %d passed\n", test_id);
+    }
+
+    cudaFree(d_dL_dY);
+    cudaFree(d_W);
+    cudaFree(d_dL_dX);
+    free(h_dL_dY);
+    free(h_W);
+    free(h_dL_dX);
+    free(h_dL_dX_ref);
+
 }
 
 __global__ void relu_backward_kernel(
@@ -1042,6 +1112,7 @@ void test_kernels()
     fc_backward_w_test(256, 128, 32, 0);
     fc_backward_w_test(input_dim, hidden_dim, batch_size, 1);
     fc_backward_w_test(hidden_dim, output_dim, batch_size, 2);
+    fc_backward_x_test(hidden_dim, output_dim, batch_size, 0);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
