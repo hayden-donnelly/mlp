@@ -832,6 +832,22 @@ void bias_backward_launch(const float* dL_dlogits, float* dL_dbias, int n_classe
     bias_backward_kernel<<<1, block_x>>>(dL_dlogits, dL_dbias, n_classes, batch_size);
 }
 
+void fc_backward_w_cpu_ref(
+    const float* dL_dY, const float* X, float* dL_dW, int input_dim, int output_dim, int batch_size
+){
+    for(int batch = 0; batch < batch_size; ++batch)
+    {
+        for(int row = 0; row < output_dim; ++row)
+        {
+            for(int col = 0; col < input_dim; ++col)
+            {
+                dL_dW[batch*input_dim*output_dim + row*input_dim + col] = 
+                    dL_dY[batch*output_dim + row] * X[batch*input_dim + col];
+            }
+        }
+    }
+}
+
 __global__ void fc_backward_w_kernel(
     const float* dL_dY, const float* X, float* dL_dW, int input_dim, int output_dim, int batch_size
 ){
@@ -865,6 +881,57 @@ void fc_backward_w_launch(
     printf("block_dim.y %d\n", block_dim.y);
     printf("grid_dim.x %d\n", grid_dim.x);
     printf("grid_dim.y %d\n", grid_dim.y);*/
+}
+
+void fc_backward_w_test(int input_dim, int output_dim, int batch_size, int test_id)
+{
+    int n_elements_dL_dY = batch_size * output_dim;
+    int n_elements_X = batch_size * input_dim;
+    int n_elements_dL_dW = batch_size * input_dim * output_dim;
+
+    float* h_dL_dY = make_random_matrix(n_elements_dL_dY, -1.0f, 1.0f);
+    float* h_X = make_random_matrix(n_elements_X, -1.0f, 1.0f);
+    float* h_dL_dW = (float*)malloc(sizeof(float) * n_elements_dL_dW);
+    float* h_dL_dW_ref = (float*)malloc(sizeof(float) * n_elements_dL_dW);
+
+    float* d_dL_dY;
+    float* d_X;
+    float* d_dL_dW;
+    CHECK_CUDA(cudaMalloc(&d_dL_dY, sizeof(float) * n_elements_dL_dY));
+    CHECK_CUDA(cudaMalloc(&d_X, sizeof(float) * n_elements_X));
+    CHECK_CUDA(cudaMalloc(&d_dL_dW, sizeof(float) * n_elements_dL_dW));
+    cudaMemcpy(d_dL_dY, h_dL_dY, sizeof(float) * n_elements_dL_dY, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_X, h_X, sizeof(float) * n_elements_X, cudaMemcpyHostToDevice);
+
+    fc_backward_w_cpu_ref(
+        (const float*)h_dL_dY, (const float*)h_X, h_dL_dW_ref, input_dim, output_dim, batch_size
+    );
+    fc_backward_w_launch(
+        (const float*)d_dL_dY, (const float*)d_X, d_dL_dW, input_dim, output_dim, batch_size
+    );
+
+    cudaMemcpy(h_dL_dW, d_dL_dW, sizeof(float) * n_elements_dL_dW, cudaMemcpyDeviceToHost);
+
+    const float eps = 0.0001f;
+    if(!matrices_are_equal(h_dL_dW, h_dL_dW_ref, n_elements_dL_dW, eps))
+    {
+        printf(
+            "fc_backward_test %d failed with input_dim = %d, output_dim = %d, batch_size = %d\n", 
+            test_id, input_dim, output_dim, batch_size
+        );
+    }
+    else
+    {
+        printf("fc_backward_test %d passed\n", test_id);
+    }
+
+    cudaFree(d_dL_dY);
+    cudaFree(d_X);
+    cudaFree(d_dL_dW);
+    free(h_dL_dY);
+    free(h_X);
+    free(h_dL_dW);
+    free(h_dL_dW_ref);
 }
 
 __global__ void fc_backward_x_kernel(
@@ -972,6 +1039,9 @@ void test_kernels()
     // Backward kernels.
     cross_entropy_backward_test(output_dim, batch_size, 0);
     softmax_backward_test(output_dim, batch_size, 0);
+    fc_backward_w_test(256, 128, 32, 0);
+    fc_backward_w_test(input_dim, hidden_dim, batch_size, 1);
+    fc_backward_w_test(hidden_dim, output_dim, batch_size, 2);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
