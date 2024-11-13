@@ -1,11 +1,11 @@
 #include <random>
 #include <cmath>
 
-float* make_random_matrix(int n_elements)
+float* make_random_matrix(int n_elements, float min, float max)
 {
     std::random_device rd;
     std::mt19937 rng(rd());
-    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    std::uniform_real_distribution<float> dist(min, max);
     
     float* mat = (float*)malloc(sizeof(float) * n_elements);
     for(int i = 0; i < n_elements; ++i)
