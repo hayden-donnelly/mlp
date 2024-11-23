@@ -987,7 +987,7 @@ void fc_backward_x_launch(
 void fc_backward_x_test(int input_dim, int output_dim, int batch_size, int test_id)
 {
     int n_elements_dL_dY = batch_size * output_dim;
-    int n_elements_W = batch_size * input_dim;
+    int n_elements_W = input_dim * output_dim;
     int n_elements_dL_dX = batch_size * input_dim;
 
     float* h_dL_dY = make_random_matrix(n_elements_dL_dY, -1.0f, 1.0f);
