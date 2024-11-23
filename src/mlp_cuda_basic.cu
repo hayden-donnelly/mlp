@@ -1033,7 +1033,19 @@ void fc_backward_x_test(int input_dim, int output_dim, int batch_size, int test_
     free(h_W);
     free(h_dL_dX);
     free(h_dL_dX_ref);
+}
 
+void relu_backward_cpu_ref(const float* dL_dY, const float* X, float* dL_dX, int input_dim, int batch_size)
+{
+    for(int batch = 0; batch < batch_size; ++batch)
+    {
+        for(int idx = 0; idx < input_dim; ++idx)
+        {
+            float X_val = X[batch*input_dim + idx];
+            float dL_dY_val = dL_dY[batch*input_dim + idx];
+            dL_dX[batch*input_dim + idx] = ((X_val > 0.0f) ? 1.0f : 0.0f) * dL_dY_val;
+        }
+    }
 }
 
 __global__ void relu_backward_kernel(
@@ -1055,7 +1067,53 @@ void relu_backward_launch(
     const int block_x = ceil(input_dim / (float)32) * 32;
     dim3 grid_dim(1, batch_size);
     dim3 block_dim(block_x, 1);
+    
     relu_backward_kernel<<<grid_dim, block_dim>>>(dL_dY, X, dL_dX, input_dim, batch_size);
+}
+
+void relu_backward_test(int input_dim, int batch_size, int test_id)
+{
+    int n_elements = batch_size * input_dim;
+    
+    float* h_dL_dY = make_random_matrix(n_elements, -1.0f, 1.0f);
+    float* h_X = make_random_matrix(n_elements, -1.0f, 1.0f);
+    float* h_dL_dX = (float*)malloc(sizeof(float) * n_elements);
+    float* h_dL_dX_ref = (float*)malloc(sizeof(float) * n_elements);
+
+    float* d_dL_dY;
+    float* d_X;
+    float* d_dL_dX;
+    CHECK_CUDA(cudaMalloc(&d_dL_dY, sizeof(float) * n_elements));
+    CHECK_CUDA(cudaMalloc(&d_X, sizeof(float) * n_elements));
+    CHECK_CUDA(cudaMalloc(&d_dL_dX, sizeof(float) * n_elements));
+    cudaMemcpy(d_dL_dY, h_dL_dY, sizeof(float) * n_elements, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_X, h_X, sizeof(float) * n_elements, cudaMemcpyHostToDevice);
+
+    relu_backward_cpu_ref((const float*)h_dL_dY, (const float*)h_X, h_dL_dX_ref, input_dim, batch_size);
+    relu_backward_launch((const float*)d_dL_dY, (const float*)d_X, d_dL_dX, input_dim, batch_size);
+    
+    cudaMemcpy(h_dL_dX, d_dL_dX, sizeof(float) * n_elements, cudaMemcpyDeviceToHost);
+
+    const float eps = 0.0001f;
+    if(!matrices_are_equal(h_dL_dX, h_dL_dX_ref, n_elements, eps))
+    {
+        printf(
+            "relu_backward_test %d failed with input_dim = %d, batch_size = %d\n", 
+            test_id, input_dim, batch_size
+        );
+    }
+    else
+    {
+        printf("relu_backward_test %d passed\n", test_id);
+    }
+
+    cudaFree(d_dL_dY);
+    cudaFree(d_X);
+    cudaFree(d_dL_dX);
+    free(h_dL_dY);
+    free(h_X);
+    free(h_dL_dX);
+    free(h_dL_dX_ref);
 }
 
 __global__ void gradient_descent_kernel(
@@ -1113,6 +1171,9 @@ void test_kernels()
     fc_backward_w_test(input_dim, hidden_dim, batch_size, 1);
     fc_backward_w_test(hidden_dim, output_dim, batch_size, 2);
     fc_backward_x_test(hidden_dim, output_dim, batch_size, 0);
+    relu_backward_test(hidden_dim, batch_size, 0);
+    relu_backward_test(hidden_dim, 32, 1);
+    relu_backward_test(input_dim, batch_size, 2);
 }
 
 template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batch_size> 
