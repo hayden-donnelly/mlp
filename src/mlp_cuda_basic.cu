@@ -625,113 +625,6 @@ void average_backward_launch(float* dL_dX, int n_inputs)
     average_backward_kernel<<<1, 32>>>(dL_dX, n_inputs);
 }
 
-void cross_entropy_backward_cpu_ref(
-    const float* probs, const int64_t* labels, 
-    float* dL_dprobs, int n_classes, int batch_size
-){
-    constexpr float eps = 0.000001f;
-    constexpr float max_grad = 30.0f;
-    for(int row = 0; row < batch_size; ++row)
-    {
-        int64_t label = labels[row];
-        for(int col = 0; col < n_classes; ++col)
-        {
-            float val = 0.0f;
-            if(col == label)
-            {
-                float prob = fmaxf(probs[row*n_classes + col], eps);
-                val = -1.0f / ((float)batch_size * prob);
-                val = fmaxf(fminf(val, max_grad), -max_grad);
-            }
-            dL_dprobs[row*n_classes + col] = val;
-        }
-    }
-}
-
-// NOTE: not using dL_dce right now since it seems like a pretty simple kernel fusion.
-// Maybe remove the average_backward_kernel.
-__global__ void cross_entropy_backward_kernel(
-    const float* dL_dce, const float* probs, const int64_t* labels, 
-    float* dL_dprobs, int n_classes, int batch_size
-){
-    constexpr float eps = 0.000001f;
-    constexpr float max_grad = 30.0f;
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if(idx < n_classes * batch_size)
-    {
-        int label = labels[idx / n_classes];
-        float val = 0.0f;
-        if(idx % n_classes == label)
-        {
-            float prob = fmaxf(probs[idx], eps);
-            val = -1.0f / ((float)batch_size * prob);
-            val = fmaxf(fminf(val, max_grad), -max_grad);
-        }
-        dL_dprobs[idx] = val;
-    }
-}
-
-void cross_entropy_backward_launch(
-    const float* dL_dce, const float* probs, const int64_t* labels, 
-    float* dL_dprobs, int n_classes, int batch_size
-){
-    const int block_x = ceil((n_classes * batch_size) / (float)32) * 32;
-    //printf("block x %d\n", block_x);
-    cross_entropy_backward_kernel<<<1, block_x>>>(dL_dce, probs, labels, dL_dprobs, n_classes, batch_size);
-}
-
-void cross_entropy_backward_test(int n_classes, int batch_size, int test_id)
-{
-    int n_elements_probs = batch_size * n_classes;
-    int n_elements_labels = batch_size;
-    int n_elements_dL_dprobs = batch_size * n_classes;
-
-    float* h_probs = make_random_matrix(n_elements_probs, 0.0f, 1.0f);
-    int64_t* h_labels = make_random_labels(n_elements_labels);
-    float* h_dL_dprobs = (float*)malloc(sizeof(float) * n_elements_dL_dprobs);
-    float* h_dL_dprobs_ref = (float*)malloc(sizeof(float) * n_elements_dL_dprobs);
-
-    float* d_probs;
-    int64_t* d_labels;
-    float* d_dL_dprobs;
-    CHECK_CUDA(cudaMalloc(&d_probs, sizeof(float) * n_elements_probs));
-    CHECK_CUDA(cudaMalloc(&d_labels, sizeof(int64_t) * n_elements_labels));
-    CHECK_CUDA(cudaMalloc(&d_dL_dprobs, sizeof(float) * n_elements_dL_dprobs));
-    cudaMemcpy(d_probs, h_probs, sizeof(float) * n_elements_probs, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_labels, h_labels, sizeof(int64_t) * n_elements_labels, cudaMemcpyHostToDevice);
-
-    cross_entropy_backward_cpu_ref(
-        (const float*)h_probs, (const int64_t*)h_labels, h_dL_dprobs_ref, n_classes, batch_size
-    );
-    cross_entropy_backward_launch(
-        NULL, (const float*)d_probs, (const int64_t*)d_labels, d_dL_dprobs, n_classes, batch_size
-    );
-    
-    cudaMemcpy(h_dL_dprobs, d_dL_dprobs, sizeof(float) * n_elements_dL_dprobs, cudaMemcpyDeviceToHost);
-    
-    const float eps = 0.0001f;
-    if(!matrices_are_equal(h_dL_dprobs, h_dL_dprobs_ref, n_elements_dL_dprobs, eps))
-    {
-        printf(
-            "cross_entropy_backward_test %d failed with n_classes = %d, batch_size = %d\n", 
-            test_id, n_classes, batch_size
-        );
-    }
-    else
-    {
-        printf("cross_entropy_backward_test %d passed\n", test_id);
-    }
-    return;
-
-    cudaFree(d_probs);
-    cudaFree(d_labels);
-    cudaFree(d_dL_dprobs);
-    free(h_probs);
-    free(h_labels);
-    free(h_dL_dprobs);
-    free(h_dL_dprobs_ref);
-}
-
 void softmax_backward_cpu_ref(
     const float* probs, const int64_t* labels, float* dL_dlogits, int n_classes, int batch_size
 ){
@@ -1120,6 +1013,7 @@ __global__ void gradient_descent_kernel(
     float* grad, float* params, float learning_rate, int n_elements, int batch_size
 ){
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    constexpr float clip_value = 10.0f;
     if(idx < n_elements)
     {
         float grad_sum = 0.0f;
@@ -1127,6 +1021,7 @@ __global__ void gradient_descent_kernel(
         {
             grad_sum += grad[batch*n_elements + idx];
         }
+        grad_sum = fmaxf(fminf(grad_sum, clip_value), -clip_value);
         params[idx] -= learning_rate * grad_sum;
     }
 }
@@ -1165,7 +1060,7 @@ void test_kernels()
     cross_entropy_forward_test(output_dim, batch_size, 0);
 
     // Backward kernels.
-    cross_entropy_backward_test(output_dim, batch_size, 0);
+    //cross_entropy_backward_test(output_dim, batch_size, 0);
     softmax_backward_test(output_dim, batch_size, 0);
     fc_backward_w_test(256, 128, 32, 0);
     fc_backward_w_test(input_dim, hidden_dim, batch_size, 1);
@@ -1210,10 +1105,10 @@ template<int tile_width, int input_dim, int hidden_dim, int output_dim, int batc
 void backward_pass(mlp_t* mlp, float learning_rate)
 {
     average_backward_launch(mlp->dL_dce, batch_size);
-    cross_entropy_backward_launch(
+    /*cross_entropy_backward_launch(
         (const float*)mlp->dL_dce, (const float*)mlp->probs, (const int64_t*)mlp->labels, 
         mlp->dL_dprobs, output_dim, batch_size
-    );
+    );*/
     softmax_backward_launch(
         (const float*)mlp->probs, (const int64_t*)mlp->labels, mlp->dL_dlogits, output_dim, batch_size
     );
@@ -1356,7 +1251,7 @@ int main()
     constexpr int output_dim = 10;
     constexpr int batch_size = 4;
     constexpr int tile_width = 32;
-    constexpr float learning_rate = 0.0001f;
+    constexpr float learning_rate = 0.01f;
     test_kernels<tile_width, input_dim, hidden_dim, output_dim, batch_size>();
 
     mlp_t mlp;
