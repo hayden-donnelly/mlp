@@ -1264,7 +1264,7 @@ int main()
     for(int i = 0; i < batch_size; ++i)
     {
         batch_labels[i] = (int64_t)train_label[batch_start_idx + i];
-        //printf("%d\n", batch_labels[i]);
+        printf("%d\n", batch_labels[i]);
     }
     cudaMemcpy(
         mlp.input, &train_image[batch_start_idx], 
@@ -1274,14 +1274,24 @@ int main()
         mlp.labels, batch_labels, 
         sizeof(int64_t) * batch_size, cudaMemcpyHostToDevice
     );
+
+    device_to_host_and_print(batch_size, input_dim, mlp.input);
     
-    for(int i = 0; i < 30000; ++i)
+    for(int i = 0; i < 100; ++i)
     {
         forward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp);
         backward_pass<tile_width, input_dim, hidden_dim, output_dim, batch_size>(&mlp, learning_rate);
-        if(i % 1000 == 0)
+        if(i % 10 == 0)
         {
             print_average_loss(mlp.ce_losses, batch_size, i);
+            //printf("logits:\n");
+            //device_to_host_and_print(batch_size, output_dim, mlp.fc2_b_inter);
+            //printf("probs:\n");
+            //device_to_host_and_print(batch_size, output_dim, mlp.probs);
+            //printf("act1:\n");
+            //device_to_host_and_print(batch_size, hidden_dim, mlp.fc1_w_inter);
+            //printf("act2:\n");
+            //device_to_host_and_print(batch_size, output_dim, mlp.fc2_w_inter);
         }
     }
 
